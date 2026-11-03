@@ -1,0 +1,11 @@
+{
+  "name": "raindown-obsidian",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Raindown for Obsidian",
+  "license": "MPL-2.0",
+  "main": "main.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "id": "raindown",
+  "name": "Raindown",
+  "version": "0.1.0",
+  "minAppVersion": "1.4.0",
+  "description": "Write back tables of contents, file lists, backlinks, components and charts into your notes as you save them.",
+  "author": "Raindeer",
+  "authorUrl": "https://raindown.dev",
+  "isDesktopOnly": true
+}
