@@ -24,11 +24,35 @@ process.env.SHELL = fakeShell('');
 const RaindownPlugin = require('../main');
 const { FileSystemAdapter, Modal, Notice } = require('./obsidian');
 
-// A stand-in for raindown that prints its arguments and what it was given, with a table of contents filled in.
+// A stand-in for raindown that runs the script, and has no server, like a Raindown from before it.
 function fakeRaindown(dir, script) {
   const file = path.join(dir, 'raindown');
-  fs.writeFileSync(file, `#!/usr/bin/env node\n${script}\n`, { mode: 0o755 });
+  fs.writeFileSync(file, `#!/usr/bin/env node\nif (process.argv[2] === 'server') process.exit(1);\n${script}\n`, { mode: 0o755 });
   return file;
+}
+
+// A stand-in for "raindown server", filling in tables of contents and rendering sections, which logs each request.
+function fakeServer(dir) {
+  const log = path.join(dir, 'requests.log');
+  const file = path.join(dir, 'raindown-server');
+  fs.writeFileSync(file, `#!/usr/bin/env node
+const fs = require('fs');
+console.log(JSON.stringify({ ready: true, version: '0.11.0' }));
+let buffer = '';
+process.stdin.on('data', (chunk) => {
+  buffer += chunk;
+  for (let end = buffer.indexOf('\\n'); end !== -1; end = buffer.indexOf('\\n')) {
+    const request = JSON.parse(buffer.slice(0, end));
+    buffer = buffer.slice(end + 1);
+    fs.appendFileSync(${JSON.stringify(log)}, (request.rewrite ? 'rewrite' : 'render') + '\\n');
+    const output = request.rewrite
+      ? request.markdown.replace('<!-- :toc -->', '- [A](#a)\\n<!-- :toc -->')
+      : '<h1>A</h1><!-- raindown:section --><ul></ul><!-- raindown:end-section -->';
+    console.log(JSON.stringify({ id: request.id, output, warnings: [] }));
+  }
+});
+`, { mode: 0o755 });
+  return { command: file, requests: () => fs.readFileSync(log, 'utf8').trim().split('\n') };
 }
 
 // A stand-in for a login shell, whose setup prints first, then prints where raindown is.
@@ -64,6 +88,7 @@ async function plugin({ dir, content, command, typed, editor }) {
     workspace: {
       onLayoutReady: () => {},
       updateOptions: () => {},
+      on: () => {},
       getLeavesOfType: () => (editor ? [{ view: { file: { path: 'note.md' }, editor } }] : [])
     }
   };
@@ -316,4 +341,26 @@ test("completes directive names, with the project's own nodes", async () => {
   assert.equal(suggest.onTrigger({ line: 0, ch: 9 }, editor('A note to'), note), null);
   assert.deepEqual(await suggest.getSuggestions({ query: 'c', file: note }), ['chart', 'Changelog']);
   assert.deepEqual(await suggest.getSuggestions({ query: 'B', file: note }), ['BookCard']);
+});
+
+test('writes back through the server, and keeps each reading view section until the note changes', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const server = fakeServer(dir);
+  const content = '# A\n\n<!-- toc: -->\n<!-- :toc -->\n';
+  const { raindown, file, current } = await plugin({ dir, content, command: server.command });
+  raindown.app.vault.getAbstractFileByPath = () => file;
+
+  await raindown.writeBack(file);
+  assert.equal(current(), '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n');
+
+  const shown = [];
+  const section = (text) => ({ sourcePath: 'note.md', getSectionInfo: () => ({ text, lineStart: 2, lineEnd: 2 }) });
+  const el = { replaceChildren: (html) => shown.push(html) };
+  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n'));
+  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n'));
+  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n\n## B\n'));
+
+  assert.deepEqual(shown, ['<ul></ul>', '<ul></ul>', '<ul></ul>']);
+  assert.deepEqual(server.requests(), ['rewrite', 'render', 'render']);
+  raindown.onunload();
 });

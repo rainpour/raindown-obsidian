@@ -12,7 +12,9 @@ const {
 } = require('obsidian');
 
 const DEFAULT_SETTINGS = { command: 'raindown', writeBackOnSave: true, bare: false };
-// Obsidian saves as you type, so a note's written back once its saves pause.
+// A note's written back once typing in it pauses this long, before Obsidian's even saved it, or once a change from
+// outside the editor, like a sync, has been saved for DELAY.
+const TYPING_DELAY = 400;
 const DELAY = 1000;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
@@ -27,6 +29,8 @@ const BUILT_INS = ['chart', 'endpoint', 'files', 'for', 'if', 'list', 'schema', 
 // Each section of reading view with <{ }> in it is rendered with the whole note, between these, then picked out.
 const SECTION_START = '<!-- raindown:section -->';
 const SECTION_END = '<!-- raindown:end-section -->';
+// How many sections' HTML reading view keeps.
+const SECTIONS_KEPT = 50;
 // A content directive in a comment, like <!-- toc: --> or <!-- Changelog: -->, or front matter allowing bare ones.
 // Saves of notes without them don't start Raindown.
 const DIRECTIVE = /<!--\s*[A-Za-z][\w:]*:|^raindown:\s*true\s*$/m;
@@ -87,12 +91,98 @@ function runRaindown(command, args, input, { cwd, timeout }) {
     const options = { cwd, timeout, maxBuffer: MAX_BUFFER };
     const child = childProcess.execFile(expandCommand(command), args, options, (error, stdout, stderr) => {
       if (error) reject(Object.assign(new Error(errorMessage(error, stderr, command)), { code: error.code }));
-      else resolve({ markdown: stdout, warnings: stderr.trim() });
+      else resolve({ output: stdout, warnings: stderr.trim() });
     });
 
     child.stdin.on('error', () => {}); // The exit callback reports why Raindown stopped reading.
     child.stdin.end(input);
   });
+}
+
+// "raindown server" keeps Raindown loaded, so writing back or rendering doesn't start Ruby again each time. It starts
+// when it's first asked something, and again after it stops. A Raindown without it, from before it, or one that doesn't
+// start, isn't asked again, and requests answer null, for running Raindown once each instead.
+class RaindownServer {
+  constructor(command) {
+    this.command = command;
+    this.pending = new Map();
+    this.nextId = 1;
+  }
+
+  // Resolves with Raindown's answer, like { output, warnings }, or null without a server, or rejects with its error.
+  async request(message, { timeout }) {
+    if (!await this.start()) return null;
+
+    return new Promise((resolve, reject) => {
+      const id = this.nextId++;
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        this.stop(); // Stuck, so the next request starts it again.
+        reject(new Error(`Raindown didn't answer within ${timeout / 1000} seconds`));
+      }, timeout);
+      this.pending.set(id, { resolve, reject, timer });
+      this.child.stdin.write(`${JSON.stringify({ id, ...message })}\n`);
+    });
+  }
+
+  start() {
+    if (this.unsupported) return Promise.resolve(false);
+
+    this.starting ??= new Promise((ready) => {
+      this.ready = false;
+      const child = childProcess.spawn(expandCommand(this.command), ['server'], { stdio: 'pipe' });
+      const unsupported = () => {
+        this.unsupported = true;
+        ready(false);
+      };
+      const timer = setTimeout(() => { unsupported(); child.kill(); }, TIMEOUT);
+      let buffer = '';
+
+      child.stdout.setEncoding('utf8').on('data', (chunk) => {
+        buffer += chunk;
+        for (let end = buffer.indexOf('\n'); end !== -1; end = buffer.indexOf('\n')) {
+          this.receive(buffer.slice(0, end), () => { clearTimeout(timer); ready(true); });
+          buffer = buffer.slice(end + 1);
+        }
+      });
+      child.stdin.on('error', () => {}); // Its exit says why it stopped.
+      child.on('error', () => { clearTimeout(timer); unsupported(); });
+      child.on('exit', () => {
+        clearTimeout(timer);
+        if (this.child === child) Object.assign(this, { child: null, starting: null });
+        this.pending.forEach(({ reject, timer: waiting }) => { clearTimeout(waiting); reject(new Error('Raindown stopped')); });
+        this.pending.clear();
+        if (!this.ready) unsupported(); // Stopping before it was ready means it can't serve.
+      });
+      this.child = child;
+    });
+
+    return this.starting;
+  }
+
+  receive(line, ready) {
+    let message;
+    try {
+      message = JSON.parse(line);
+    } catch {
+      return; // Not an answer.
+    }
+    if (message.ready) {
+      this.ready = true;
+      return ready();
+    }
+
+    const request = this.pending.get(message.id);
+    if (!request) return;
+    this.pending.delete(message.id);
+    clearTimeout(request.timer);
+    if (message.error) request.reject(new Error(message.error));
+    else request.resolve(message);
+  }
+
+  stop() {
+    this.child?.kill();
+  }
 }
 
 // The standalone binary released for this computer, like raindown-macos-arm64, or null if there isn't one.
@@ -338,6 +428,8 @@ class RaindownPlugin extends Plugin {
     this.timers = new Map();
     // What each note was last written back as, so the save that writing it back makes doesn't start Raindown again.
     this.written = new Map();
+    // Each section's HTML in reading view, by its note's path and Markdown.
+    this.sections = new Map();
     this.status = this.addStatusBarItem();
     this.addSettingTab(new RaindownSettingTab(this.app, this));
 
@@ -355,6 +447,9 @@ class RaindownPlugin extends Plugin {
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
     });
     this.addCommand({ id: 'download', name: 'Download Raindown', callback: () => this.installRaindown() });
+    this.registerEvent(this.app.workspace.on('editor-change', (_editor, info) => {
+      if (info.file) this.scheduleWriteBack(info.file, TYPING_DELAY);
+    }));
     this.registerEvent(this.app.vault.on('modify', (file) => this.scheduleWriteBack(file)));
     // The line of each note's error, for the editor to underline.
     this.errors = new Map();
@@ -372,6 +467,23 @@ class RaindownPlugin extends Plugin {
 
   onunload() {
     this.timers.forEach((timer) => clearTimeout(timer));
+    this.server?.stop();
+  }
+
+  // Raindown's answer, through its server when it has one, or else from running it once, as { output, warnings }.
+  async raindown({ file, markdown, rewrite = false, execute = false, timeout = TIMEOUT }) {
+    const filePath = this.absolutePath(file);
+    const bare = this.settings.bare;
+    if (this.server?.command !== this.settings.command) {
+      this.server?.stop();
+      this.server = new RaindownServer(this.settings.command);
+    }
+
+    const answer = await this.server.request({ path: filePath, markdown, rewrite, execute, bare }, { timeout });
+    if (answer) return { output: answer.output, warnings: (answer.warnings ?? []).join('\n') };
+
+    const args = rewrite ? rewriteArgs(filePath, { execute, bare }) : [filePath, '--stdin', ...(bare ? ['--bare'] : [])];
+    return runRaindown(this.settings.command, args, markdown, { cwd: path.dirname(filePath), timeout });
   }
 
   withActiveNote(checking, action) {
@@ -382,14 +494,14 @@ class RaindownPlugin extends Plugin {
     return true;
   }
 
-  scheduleWriteBack(file) {
+  scheduleWriteBack(file, delay = DELAY) {
     if (!this.settings.writeBackOnSave || file.extension !== 'md') return;
 
     clearTimeout(this.timers.get(file.path));
     this.timers.set(file.path, setTimeout(() => {
       this.timers.delete(file.path);
       this.writeBack(file);
-    }, DELAY));
+    }, delay));
   }
 
   // A note added, renamed or removed changes the lists in other notes, like files:, so they're written back.
@@ -417,12 +529,10 @@ class RaindownPlugin extends Plugin {
     const unchanged = !force && this.written.get(file.path) === original;
     if (!notify && (unchanged || !hasDirectives(original, this.settings))) return false;
 
-    const filePath = this.absolutePath(file);
     const timeout = execute ? ENDPOINT_TIMEOUT : TIMEOUT;
 
     try {
-      const args = rewriteArgs(filePath, { execute, bare: this.settings.bare });
-      const { markdown, warnings } = await runRaindown(this.settings.command, args, original, { cwd: path.dirname(filePath), timeout });
+      const { output: markdown, warnings } = await this.raindown({ file, markdown: original, rewrite: true, execute, timeout });
       // Raindown never empties a note, so nothing back, like from a wrapper script that failed, is an error.
       if (!markdown.trim() && original.trim()) throw new Error("Raindown didn't print the note back, so it's left as it is");
       if (markdown !== original) await this.applyToNote(file, original, markdown);
@@ -469,14 +579,25 @@ class RaindownPlugin extends Plugin {
     if (!lines?.includes('<{') || !file) return;
 
     try {
-      const input = markSection(section.text, section.lineStart, section.lineEnd);
-      const args = [this.absolutePath(file), '--stdin', ...(this.settings.bare ? ['--bare'] : [])];
-      const { markdown: html } = await runRaindown(this.settings.command, args, input, { timeout: TIMEOUT });
-      const rendered = sectionHtml(html);
+      const rendered = await this.sectionHtmlFor(file, markSection(section.text, section.lineStart, section.lineEnd));
       if (rendered !== null) el.replaceChildren(sanitizeHTMLToDom(rendered));
     } catch {
       // Reading view keeps what Obsidian rendered. Saving the note shows the error.
     }
+  }
+
+  // Reading view renders a section again each time it's shown, like switching to it, so its HTML is kept until the
+  // note changes, and a render that's under way is shared. Failed renders aren't kept.
+  sectionHtmlFor(file, markdown) {
+    const key = `${file.path}\0${markdown}`;
+    if (!this.sections.has(key)) {
+      const html = this.raindown({ file, markdown }).then(({ output }) => sectionHtml(output));
+      html.catch(() => this.sections.delete(key));
+      this.sections.set(key, html);
+      if (this.sections.size > SECTIONS_KEPT) this.sections.delete(this.sections.keys().next().value);
+    }
+
+    return this.sections.get(key);
   }
 
   // An open note's changed in its editor, as typing it would be, which Obsidian then saves, rather than on disk under
@@ -524,7 +645,7 @@ class RaindownPlugin extends Plugin {
     await this.saveData(this.settings);
     try {
       const tag = (await request({ url: LATEST_RELEASE })).json.tag_name;
-      const { markdown: installed } = await runRaindown(binaryPath(), ['--version'], '', { timeout: TIMEOUT });
+      const { output: installed } = await runRaindown(binaryPath(), ['--version'], '', { timeout: TIMEOUT });
       if (tag === this.settings.skippedTag || !isNewer(tag, installed.trim())) return;
 
       this.ask({
@@ -643,5 +764,5 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryName, binaryPath, changedRange, directiveTokens, downloadRaindown, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, isNewer, markSection, rewriteArgs, sectionHtml,
-  runRaindown, shellRaindown
+  RaindownServer, runRaindown, shellRaindown
 });
