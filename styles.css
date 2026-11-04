@@ -1,0 +1,13 @@
+/* Raindown's directives in the editor, in the theme's own colours. A directive in a comment is inside Obsidian's
+   comment highlighting, so its colours are set on what's inside it too. */
+.cm-raindown-name, .cm-raindown-name * { color: var(--text-accent); font-weight: var(--font-semibold); }
+.cm-raindown-end, .cm-raindown-end *,
+.cm-raindown-self-closing, .cm-raindown-self-closing * { color: var(--text-accent); }
+.cm-raindown-prop, .cm-raindown-prop * { color: var(--code-property); }
+.cm-raindown-string, .cm-raindown-string * { color: var(--code-string); }
+.cm-raindown-number, .cm-raindown-number * { color: var(--code-value); }
+.cm-raindown-flag, .cm-raindown-flag * { color: var(--code-keyword); }
+.cm-raindown-variable, .cm-raindown-variable * { color: var(--code-important); }
+.cm-raindown-delimiter, .cm-raindown-delimiter * { color: var(--code-punctuation); }
+/* The line of an error Raindown found, like a directive without its end tag. */
+.cm-raindown-error { text-decoration: underline wavy var(--text-error); text-underline-offset: 3px; }

@@ -13,6 +13,9 @@ class Plugin {
   addSettingTab() {}
   addCommand(command) { this.commands.push(command); }
   registerEvent() {}
+  registerEditorExtension() {}
+  registerEditorSuggest() {}
+  registerMarkdownPostProcessor() {}
 }
 
 class Notice {
@@ -26,7 +29,25 @@ class FileSystemAdapter {
   getBasePath() { return this.basePath; }
 }
 
+class Modal {
+  static opened = [];
+
+  constructor(app) { this.app = app; }
+  open() { Modal.opened.push(this); }
+}
+
+class EditorSuggest {
+  constructor(app) { this.app = app; }
+}
+
 class PluginSettingTab {}
 class Setting {}
 
-module.exports = { FileSystemAdapter, Notice, Plugin, PluginSettingTab, Setting };
+async function requestUrl() { throw new Error('Tests pass their own request'); }
+
+const editorInfoField = {};
+const sanitizeHTMLToDom = (html) => html;
+
+module.exports = {
+  EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, requestUrl, sanitizeHTMLToDom
+};

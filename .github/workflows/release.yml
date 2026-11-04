@@ -1,0 +1,26 @@
+name: release
+
+# Attaches the plugin's files to a GitHub release, which Obsidian installs from. Obsidian needs the tag to be the
+# manifest's version, like 0.2.0, without a v. This folder is the root of the plugin's own repo, where this runs.
+
+on:
+  push:
+    tags: ['*']
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm test
+      - name: Check the tag is the manifest's version
+        run: test "$GITHUB_REF_NAME" = "$(node -p "require('./manifest.json').version")"
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --generate-notes
