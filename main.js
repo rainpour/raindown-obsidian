@@ -14,7 +14,7 @@ const {
 const DEFAULT_SETTINGS = { command: 'raindown', writeBackOnSave: true, bare: false };
 // A note's written back once typing in it pauses this long, before Obsidian's even saved it, or once a change from
 // outside the editor, like a sync, has been saved for DELAY.
-const TYPING_DELAY = 400;
+const TYPING_DELAY = 250;
 const DELAY = 1000;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
@@ -461,6 +461,8 @@ class RaindownPlugin extends Plugin {
       for (const event of ['create', 'rename', 'delete']) {
         this.registerEvent(this.app.vault.on(event, (file) => this.scheduleListsWriteBack(file)));
       }
+      // Started now, so the first write-back doesn't wait for Raindown to load.
+      if (this.settings.writeBackOnSave) this.serverFor().start();
       this.checkForUpdate();
     });
   }
@@ -470,16 +472,21 @@ class RaindownPlugin extends Plugin {
     this.server?.stop();
   }
 
-  // Raindown's answer, through its server when it has one, or else from running it once, as { output, warnings }.
-  async raindown({ file, markdown, rewrite = false, execute = false, timeout = TIMEOUT }) {
-    const filePath = this.absolutePath(file);
-    const bare = this.settings.bare;
+  // The server for the Raindown command set now, made again when it changes.
+  serverFor() {
     if (this.server?.command !== this.settings.command) {
       this.server?.stop();
       this.server = new RaindownServer(this.settings.command);
     }
 
-    const answer = await this.server.request({ path: filePath, markdown, rewrite, execute, bare }, { timeout });
+    return this.server;
+  }
+
+  // Raindown's answer, through its server when it has one, or else from running it once, as { output, warnings }.
+  async raindown({ file, markdown, rewrite = false, execute = false, timeout = TIMEOUT }) {
+    const filePath = this.absolutePath(file);
+    const bare = this.settings.bare;
+    const answer = await this.serverFor().request({ path: filePath, markdown, rewrite, execute, bare }, { timeout });
     if (answer) return { output: answer.output, warnings: (answer.warnings ?? []).join('\n') };
 
     const args = rewrite ? rewriteArgs(filePath, { execute, bare }) : [filePath, '--stdin', ...(bare ? ['--bare'] : [])];
