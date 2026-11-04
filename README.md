@@ -64,9 +64,9 @@ To link it into a vault while you work on it, `ln -s "$PWD" VAULT/.obsidian/plug
 
 ### Releasing
 
-Obsidian installs a plugin from its GitHub repo's releases, so the plugin is released from a repo of its own, with this folder as its root. `npm version minor`, or `patch`, sets the version in `package.json` and `manifest.json`, adds it to `versions.json` with the oldest Obsidian it runs on, and tags it without a `v`, like `0.2.0`, as Obsidian needs. Pushing the tag runs the tests and attaches `main.js`, `manifest.json` and `styles.css` to a release:
+Obsidian installs a plugin from its GitHub repo's releases, so the plugin is released from a repo of its own, with this folder as its root. `bin/bump` runs `npm version patch`, or `minor` or `major`, which sets the version in `package.json` and `manifest.json`, adds it to `versions.json` with the oldest Obsidian it runs on, and tags it without a `v`, like `0.2.0`, as Obsidian needs, then pushes it, which runs the tests and attaches `main.js`, `manifest.json` and `styles.css` to a release:
 
 ```sh
-npm version minor
-git push --follow-tags
+bin/bump        # patch, or the manifest's version when it isn't tagged yet, like the first release
+bin/bump minor
 ```
