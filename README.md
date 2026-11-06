@@ -20,6 +20,7 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 
 - **Highlighting**, like in the VS Code extension: directives in comments, with their end tags, in `<{ }>`, and bare where they'd write back.
 - **Completion** of directive names after `<!--` or `<{`, or at the start of a line where bare directives write back, from Raindown's own, like `toc:` and `list:`, and your project's nodes in `.raindown/`.
+- **Tables** use your monospace font, so the columns Raindown lines up look lined up.
 - **Errors**, like a directive that's half typed, show in the status bar, and the line they're on is underlined, when Raindown says which it is.
 - **Reading view** shows `<{ }>` directives, like `<{ :toc }>`, as Raindown renders them, which only Raindown can. Each section's kept until the note changes, so switching views doesn't render it again. Wikilinks are Obsidian's own, so Obsidian renders the rest of the note as usual.
 

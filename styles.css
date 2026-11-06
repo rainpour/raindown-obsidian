@@ -11,3 +11,6 @@
 .cm-raindown-delimiter, .cm-raindown-delimiter * { color: var(--code-punctuation); }
 /* The line of an error Raindown found, like a directive without its end tag. */
 .cm-raindown-error { text-decoration: underline wavy var(--text-error); text-underline-offset: 3px; }
+/* Raindown pads a table's columns to line up, which only shows in a monospace font. */
+.markdown-source-view.mod-cm6 .cm-raindown-table,
+.markdown-source-view.mod-cm6 .cm-raindown-table * { font-family: var(--font-monospace); }

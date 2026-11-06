@@ -334,6 +334,11 @@ function argumentType(token, { antlers, first }) {
   return antlers ? 'variable' : null;
 }
 
+// The start of each line of a Markdown table, as Raindown's columns only line up in a monospace font.
+function tableLines(markdown) {
+  return [...markdown.matchAll(/^[ \t]*\|.*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
+}
+
 // The line an error is on, from Raindown's messages like "<!-- toc: --> on line 7 needs <!-- :toc -->", or null.
 function errorLine(message) {
   const line = /\bon line (\d+)\b/.exec(message ?? '')?.[1];
@@ -342,19 +347,23 @@ function errorLine(message) {
 }
 
 // The editor extension, from the CodeMirror Obsidian has, highlighting a note again as it changes, and underlining
-// the line of its error, if it has one.
+// the line of its error, if it has one, and setting its tables in a monospace font.
 function highlighting(plugin) {
   const { Decoration, ViewPlugin } = require('@codemirror/view');
   const { RangeSetBuilder } = require('@codemirror/state');
-  const marks = { error: Decoration.line({ class: 'cm-raindown-error' }) };
+  const marks = {
+    error: Decoration.line({ class: 'cm-raindown-error' }),
+    table: Decoration.line({ class: 'cm-raindown-table' })
+  };
   const errorFor = (view) => plugin.errors.get(view.state.field(editorInfoField, false)?.file?.path) ?? null;
   const decorate = (view) => {
     const builder = new RangeSetBuilder();
     const line = errorFor(view);
-    const ranges = directiveTokens(view.state.doc.toString(), { bare: plugin.settings.bare });
+    const markdown = view.state.doc.toString();
+    const ranges = [...directiveTokens(markdown, { bare: plugin.settings.bare }), ...tableLines(markdown)];
     if (line && line <= view.state.doc.lines) ranges.unshift({ from: view.state.doc.line(line).from, type: 'error' });
 
-    for (const { from, to, type } of ranges.sort((a, b) => a.from - b.from || (a.type === 'error' ? -1 : 1))) {
+    for (const { from, to, type } of ranges.sort((a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1))) {
       builder.add(from, to ?? from, marks[type] ??= Decoration.mark({ class: `cm-raindown-${type}` }));
     }
     return { decorations: builder.finish(), line };
@@ -770,6 +779,6 @@ class RaindownSettingTab extends PluginSettingTab {
 module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryName, binaryPath, changedRange, directiveTokens, downloadRaindown, errorLine, errorMessage, expandCommand,
-  DirectiveSuggest, hasDirectives, isNewer, markSection, rewriteArgs, sectionHtml,
+  DirectiveSuggest, hasDirectives, isNewer, markSection, rewriteArgs, sectionHtml, tableLines,
   RaindownServer, runRaindown, shellRaindown
 });

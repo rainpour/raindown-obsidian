@@ -364,3 +364,9 @@ test('writes back through the server, and keeps each reading view section until 
   assert.deepEqual(server.requests(), ['rewrite', 'render', 'render']);
   raindown.onunload();
 });
+
+test('finds the start of each line of a table, and no others', () => {
+  const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
+
+  assert.deepEqual(RaindownPlugin.tableLines(text).map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |']);
+});
