@@ -23,9 +23,9 @@ const RELEASES = 'https://github.com/rainpour/raindown/releases';
 const LATEST_RELEASE = 'https://api.github.com/repos/rainpour/raindown/releases/latest';
 const DAY = 24 * 60 * 60 * 1000;
 // Notes listing others, which a note being added, renamed or removed changes.
-const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})(?:files|list):/m;
+const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})list:/m;
 // Raindown's directives, for completing their names. A project's own nodes in .raindown/ are added to them.
-const BUILT_INS = ['chart', 'endpoint', 'files', 'for', 'if', 'list', 'schema', 'toc'];
+const BUILT_INS = ['chart', 'endpoint', 'for', 'if', 'list', 'schema', 'toc'];
 // Each section of reading view with <{ }> in it is rendered with the whole note, between these, then picked out.
 const SECTION_START = '<!-- raindown:section -->';
 const SECTION_END = '<!-- raindown:end-section -->';
@@ -511,7 +511,7 @@ class RaindownPlugin extends Plugin {
     }, delay));
   }
 
-  // A note added, renamed or removed changes the lists in other notes, like files:, so they're written back.
+  // A note added, renamed or removed changes the lists in other notes, like list:, so they're written back.
   scheduleListsWriteBack(file) {
     if (!this.settings.writeBackOnSave || file.extension !== 'md') return;
 
@@ -755,7 +755,7 @@ class RaindownSettingTab extends PluginSettingTab {
       'Write back to a note with directives once you stop typing. Endpoints only run from the command.');
     this.addToggle('bare', 'Bare directives in every note',
       'Write back to directives on their own line, like toc:, in every note, not only ones with "raindown: true" in ' +
-      'their front matter. A line like files: that\'s only text gets a file list.');
+      'their front matter. A line like list: that\'s only text gets a file list.');
   }
 
   addToggle(key, name, description) {

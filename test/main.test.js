@@ -275,8 +275,8 @@ function highlighted(text, options) {
 }
 
 test('highlights directives in comments, with their end tags, and in <{ }>', () => {
-  assert.deepEqual(highlighted("<!-- files: folder: 'notes' limit=3 -->\n<!-- :files -->\n"), [
-    ['files:', 'name'], ['folder:', 'prop'], ["'notes'", 'string'], ['limit=', 'prop'], ['3', 'number'], [':files', 'end']
+  assert.deepEqual(highlighted("<!-- list: folder: 'notes' limit=3 -->\n<!-- :list -->\n"), [
+    ['list:', 'name'], ['folder:', 'prop'], ["'notes'", 'string'], ['limit=', 'prop'], ['3', 'number'], [':list', 'end']
   ]);
   assert.deepEqual(highlighted('<{ list: page folder: {dir} }> and <{ :toc }>'), [
     ['<{', 'delimiter'], ['list:', 'name'], ['page', 'variable'], ['folder:', 'prop'], ['{dir}', 'variable'], ['}>', 'delimiter'],
@@ -297,7 +297,7 @@ test('highlights bare directives only where they write back, and not in code or 
 
 test('writes back every note with directives, and says how many changed', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const notes = { 'a.md': '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', 'b.md': '# B\n', 'c.md': '# C\n\n<!-- files: -->\n' };
+  const notes = { 'a.md': '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', 'b.md': '# B\n', 'c.md': '# C\n\n<!-- list: -->\n' };
   const { raindown } = await plugin({ dir, content: '', command: fakeRaindown(dir, FILL_TOC) });
   const files = Object.keys(notes).map((name) => ({ path: name, extension: 'md' }));
   Object.assign(raindown.app.vault, {

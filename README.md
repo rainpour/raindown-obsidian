@@ -3,23 +3,23 @@
 Writes back to your notes as you save them, like `raindown watch`: tables of contents, file lists, [components](https://raindown.dev/docs/components) and charts. Unlike a query plugin, what it writes is plain Markdown in the note, so it reads the same on GitHub, on your phone and in any other editor.
 
 ```md
-<!-- files: folder: 'journal' -->
+<!-- list: folder: 'journal' -->
 - [Today](<journal/Today.md>)
-<!-- :files -->
+<!-- :list -->
 ```
 
 ## How it works
 
 Once you stop typing, the plugin gives the note to Raindown's [editor server](https://raindown.dev/docs/cli#editor-server), `raindown server`, which answers with the note as Raindown would write it back. It keeps Raindown loaded, so after the first, which takes about a second, each takes a few milliseconds. With a Raindown from before it, the plugin runs `raindown NOTE --stdin --rewrite` each time instead. The plugin applies that through Obsidian, and only if the note hasn't changed since, so nothing you type is lost. Notes without directives, like `<!-- toc: -->`, or `raindown: true` in their front matter, don't start Raindown.
 
-A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare directives in every note** is on. Only names Raindown knows, like `toc:`, `files:` and your project's nodes, write anything, so a line like `Summary:` is left alone, but a line like `files:` that's only text gets a file list.
+A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare directives in every note** is on. Only names Raindown knows, like `toc:`, `list:` and your project's nodes, write anything, so a line like `Summary:` is left alone, but a line like `list:` that's only text gets a file list.
 
-Adding, renaming or removing a note writes back the notes with lists, like `files:` and `list:`, so they don't go stale.
+Adding, renaming or removing a note writes back the notes with lists, like `list:`, so they don't go stale.
 
 ## In the editor
 
 - **Highlighting**, like in the VS Code extension: directives in comments, with their end tags, in `<{ }>`, and bare where they'd write back.
-- **Completion** of directive names after `<!--` or `<{`, or at the start of a line where bare directives write back, from Raindown's own, like `toc:` and `files:`, and your project's nodes in `.raindown/`.
+- **Completion** of directive names after `<!--` or `<{`, or at the start of a line where bare directives write back, from Raindown's own, like `toc:` and `list:`, and your project's nodes in `.raindown/`.
 - **Errors**, like a directive that's half typed, show in the status bar, and the line they're on is underlined, when Raindown says which it is.
 - **Reading view** shows `<{ }>` directives, like `<{ :toc }>`, as Raindown renders them, which only Raindown can. Each section's kept until the note changes, so switching views doesn't render it again. Wikilinks are Obsidian's own, so Obsidian renders the rest of the note as usual.
 
@@ -42,10 +42,10 @@ It can also come from `gem install raindown`, or set the plugin's **Raindown com
 
 ## Settings
 
-| Setting                           | Default    | Description                                                                          |
-| --------------------------------- | ---------- | ------------------------------------------------------------------------------------ |
-| **Raindown command**              | `raindown` | The raindown executable, or its full path                                            |
-| **Write back on save**            | On         | Write back to a note with directives once you stop typing                            |
+| Setting                           | Default    | Description                                                                |
+| --------------------------------- | ---------- | -------------------------------------------------------------------------- |
+| **Raindown command**              | `raindown` | The raindown executable, or its full path                                  |
+| **Write back on save**            | On         | Write back to a note with directives once you stop typing                  |
 | **Bare directives in every note** | Off        | Directives on their own line, like `toc:`, in every note, as with `--bare` |
 
 ## Install
