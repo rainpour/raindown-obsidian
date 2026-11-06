@@ -72,7 +72,17 @@ function fakeEditor(text) {
     text,
     getValue() { return this.text; },
     offsetToPos(offset) { return offset; },
-    replaceRange(replacement, from, to) { this.text = this.text.slice(0, from) + replacement + this.text.slice(to); }
+    cursor: { line: 0, ch: 0 },
+    getCursor() { return this.cursor; },
+    setSelection(_anchor, head) { this.cursor = head; },
+    replaceRange(replacement, from, to) { this.text = this.text.slice(0, from) + replacement + this.text.slice(to); },
+    transaction({ changes }) {
+      const lines = this.text.split('\n');
+      for (const { from, to, text: replacement } of changes) {
+        lines[from.line] = lines[from.line].slice(0, from.ch) + replacement + lines[from.line].slice(to.ch);
+      }
+      this.text = lines.join('\n');
+    }
   };
 }
 
@@ -369,4 +379,64 @@ test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 
   assert.deepEqual(RaindownPlugin.tableLines(text).map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |']);
+});
+
+test('changes each changed line on its own, last first, so a table lined up again keeps the cursor out of them', () => {
+  assert.deepEqual(RaindownPlugin.changedLines('a1\nb\nc1', 'a2\nb\nc2'), [
+    { from: { line: 2, ch: 1 }, to: { line: 2, ch: 2 }, text: '2' },
+    { from: { line: 0, ch: 1 }, to: { line: 0, ch: 2 }, text: '2' }
+  ]);
+  assert.equal(RaindownPlugin.changedLines('a', 'a\nb'), null);
+});
+
+test('keeps the cursor after the same text as a table is lined up again', () => {
+  const before = '| Total | =sum()  |';
+  const after = '| Total | =sum() |';
+
+  assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: 16 }, before, after), { line: 0, ch: 16 });
+  assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: 7 }, '| Unit  | x |', '| Unit | x |'), { line: 0, ch: 7 });
+  assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: 5 }, '| a   b |', '| a b   |'), { line: 0, ch: 4 });
+});
+
+test("updates a note's table comments when it's changed since, leaving its other lines alone", async () => {
+  const comment = (hash) => `<!-- table 1 row · ${hash} -->`;
+  const editor = fakeEditor(`${comment('aaa111')}\n| typed more |`);
+  const note = { editorFor: () => editor };
+
+  await RaindownPlugin.prototype.applyToNote.call(note, {}, `${comment('aaa111')}\n| typed |`, `${comment('bbb222')}\n| typed |`);
+
+  assert.equal(editor.text, `${comment('bbb222')}\n| typed more |`);
+  assert.deepEqual(RaindownPlugin.tableCommentChanges(comment('aaa111'), `${comment('bbb222')}\n${comment('ccc333')}`), []);
+});
+
+test('writes a note back one at a time, once more if asked to meanwhile', async () => {
+  const finished = [];
+  const note = {
+    writing: new Map(),
+    writeBackInTurn: RaindownPlugin.prototype.writeBackInTurn,
+    writeBack() { return new Promise((resolve) => finished.push(resolve)); }
+  };
+
+  note.writeBackInTurn({ path: 'a.md' });
+  note.writeBackInTurn({ path: 'a.md' });
+  note.writeBackInTurn({ path: 'a.md' });
+  assert.equal(finished.length, 1);
+
+  finished[0]();
+  await new Promise(setImmediate);
+  assert.equal(finished.length, 2);
+
+  finished[1]();
+  await new Promise(setImmediate);
+  assert.equal(finished.length, 2);
+  assert.equal(note.writing.size, 0);
+});
+
+test('knows when the cursor is in a table cell starting with =', () => {
+  const row = '| Total | =sum(c) | note |';
+
+  assert.equal(RaindownPlugin.inFormulaCell(row, row.indexOf(')')), true);
+  assert.equal(RaindownPlugin.inFormulaCell(row, 5), false);
+  assert.equal(RaindownPlugin.inFormulaCell(row, row.length - 2), false);
+  assert.equal(RaindownPlugin.inFormulaCell('total =sum(c)', 12), false);
 });

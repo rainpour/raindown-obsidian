@@ -13,9 +13,11 @@ const {
 
 const DEFAULT_SETTINGS = { command: 'raindown', writeBackOnSave: true, bare: false };
 // A note's written back once typing in it pauses this long, before Obsidian's even saved it, or once a change from
-// outside the editor, like a sync, has been saved for DELAY.
-const TYPING_DELAY = 250;
+// outside the editor, like a sync, has been saved for DELAY. Typing a formula in a table waits for DELAY too, as
+// =sum(c) is already whole on the way to =sum(cost), with Obsidian closing its bracket.
+const TYPING_DELAY = 0;
 const DELAY = 1000;
+const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
 const MAX_BUFFER = 32 * 1024 * 1024;
@@ -55,7 +57,7 @@ function applyRewrite(current, original, rewritten) {
 }
 
 // The part of a note that changed, as offsets in it before and the text after, so an editor only replaces that part
-// and the cursor stays where it was.
+// and the cursor stays where it was, when it's outside that part.
 function changedRange(before, after) {
   let from = 0;
   while (from < before.length && before[from] === after[from]) from++;
@@ -64,6 +66,49 @@ function changedRange(before, after) {
   while (end < before.length - from && end < after.length - from && before.at(-1 - end) === after.at(-1 - end)) end++;
 
   return { from, to: before.length - end, text: after.slice(from, after.length - end) };
+}
+
+// The changes to each line that changed, last first, or null when lines were added or removed. A table lined up again
+// changes lines above and below the cursor, which one change across them all would replace, moving the cursor.
+function changedLines(before, after) {
+  const [oldLines, newLines] = [before.split('\n'), after.split('\n')];
+  if (oldLines.length !== newLines.length) return null;
+
+  return oldLines.flatMap((line, number) => {
+    if (line === newLines[number]) return [];
+
+    const { from, to, text } = changedRange(line, newLines[number]);
+    return [{ from: { line: number, ch: from }, to: { line: number, ch: to }, text }];
+  }).reverse();
+}
+
+// The changes to the note's table comments, last first, to those Raindown just wrote. It wrote their files too, so
+// when the note's changed since, its comments must still say so, or the next write-back reads as a conflict.
+function tableCommentChanges(current, markdown) {
+  const comments = (text) => text.split('\n').flatMap((line, number) => (TABLE_COMMENT.test(line) ? [{ line, number }] : []));
+  const [oldComments, newComments] = [comments(current), comments(markdown)];
+  if (oldComments.length !== newComments.length) return [];
+
+  return oldComments.flatMap(({ line, number }, index) => {
+    if (line === newComments[index].line) return [];
+
+    return [{ from: { line: number, ch: 0 }, to: { line: number, ch: line.length }, text: newComments[index].line }];
+  }).reverse();
+}
+
+// Where the cursor belongs on its line once it's changed: after the same text, however its spaces moved, and after a
+// space it just typed, as lining up a table trims that from its cell, where the next word would need it.
+function movedCursor({ line, ch }, before, after) {
+  const head = before.split('\n')[line].slice(0, ch);
+  const text = after.split('\n')[line];
+  const wanted = head.replace(/\s/g, '').length;
+  let moved = 0;
+  for (let seen = 0; seen < wanted && moved < text.length; moved++) {
+    if (!/\s/.test(text[moved])) seen++;
+  }
+  if (/\s$/.test(head) && /\s/.test(text[moved] ?? '')) moved++;
+
+  return { line, ch: moved };
 }
 
 // The command as it's set, with ~ for the home folder, which only a shell would expand.
@@ -334,6 +379,22 @@ function argumentType(token, { antlers, first }) {
   return antlers ? 'variable' : null;
 }
 
+// Whether the cursor's in a table cell starting with =, so a formula that's still being typed.
+function inFormulaCell(line, ch) {
+  const start = line.lastIndexOf('|', ch - 1);
+  if (!line.trimStart().startsWith('|') || start === -1) return false;
+
+  return line.slice(start + 1, ch).trimStart().startsWith('=');
+}
+
+// How long to wait for typing in the editor to pause.
+function typingDelay(editor) {
+  const { line, ch } = editor.getCursor();
+  if (inFormulaCell(editor.getLine(line), ch)) return DELAY;
+
+  return TYPING_DELAY;
+}
+
 // The start of each line of a Markdown table, as Raindown's columns only line up in a monospace font.
 function tableLines(markdown) {
   return [...markdown.matchAll(/^[ \t]*\|.*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
@@ -435,6 +496,8 @@ class RaindownPlugin extends Plugin {
   async onload() {
     this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
     this.timers = new Map();
+    // Each note being written back, and whether it's been asked to again.
+    this.writing = new Map();
     // What each note was last written back as, so the save that writing it back makes doesn't start Raindown again.
     this.written = new Map();
     // Each section's HTML in reading view, by its note's path and Markdown.
@@ -456,8 +519,8 @@ class RaindownPlugin extends Plugin {
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
     });
     this.addCommand({ id: 'download', name: 'Download Raindown', callback: () => this.installRaindown() });
-    this.registerEvent(this.app.workspace.on('editor-change', (_editor, info) => {
-      if (info.file) this.scheduleWriteBack(info.file, TYPING_DELAY);
+    this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
+      if (info.file) this.scheduleWriteBack(info.file, typingDelay(editor));
     }));
     this.registerEvent(this.app.vault.on('modify', (file) => this.scheduleWriteBack(file)));
     // The line of each note's error, for the editor to underline.
@@ -516,8 +579,26 @@ class RaindownPlugin extends Plugin {
     clearTimeout(this.timers.get(file.path));
     this.timers.set(file.path, setTimeout(() => {
       this.timers.delete(file.path);
-      this.writeBack(file);
+      this.writeBackInTurn(file);
     }, delay));
+  }
+
+  // One write-back of a note at a time, as each needs the table comments the last one wrote. Asked again meanwhile, it
+  // runs once more when it's done, with the note as it is by then.
+  async writeBackInTurn(file) {
+    if (this.writing.has(file.path)) {
+      this.writing.set(file.path, true);
+      return;
+    }
+
+    this.writing.set(file.path, false);
+    try {
+      await this.writeBack(file);
+    } finally {
+      const again = this.writing.get(file.path);
+      this.writing.delete(file.path);
+      if (again) this.writeBackInTurn(file);
+    }
   }
 
   // A note added, renamed or removed changes the lists in other notes, like list:, so they're written back.
@@ -621,10 +702,22 @@ class RaindownPlugin extends Plugin {
   async applyToNote(file, original, markdown) {
     const editor = this.editorFor(file);
     if (!editor) return this.app.vault.process(file, (current) => applyRewrite(current, original, markdown));
-    if (editor.getValue() !== original) return;
+    const current = editor.getValue();
+    if (current !== original) {
+      const comments = tableCommentChanges(current, markdown);
+      if (comments.length) editor.transaction({ changes: comments });
+      return;
+    }
 
-    const { from, to, text } = changedRange(original, markdown);
-    editor.replaceRange(text, editor.offsetToPos(from), editor.offsetToPos(to));
+    const changes = changedLines(original, markdown);
+    if (!changes) {
+      const { from, to, text } = changedRange(original, markdown);
+      return editor.replaceRange(text, editor.offsetToPos(from), editor.offsetToPos(to));
+    }
+
+    const [anchor, head] = [editor.getCursor('anchor'), editor.getCursor('head')];
+    editor.transaction({ changes });
+    editor.setSelection(movedCursor(anchor, original, markdown), movedCursor(head, original, markdown));
   }
 
   editorFor(file) {
@@ -778,7 +871,7 @@ class RaindownSettingTab extends PluginSettingTab {
 
 module.exports = RaindownPlugin;
 Object.assign(module.exports, {
-  applyRewrite, binaryName, binaryPath, changedRange, directiveTokens, downloadRaindown, errorLine, errorMessage, expandCommand,
-  DirectiveSuggest, hasDirectives, isNewer, markSection, rewriteArgs, sectionHtml, tableLines,
+  applyRewrite, binaryName, binaryPath, changedLines, changedRange, directiveTokens, downloadRaindown, errorLine, errorMessage, expandCommand,
+  DirectiveSuggest, hasDirectives, inFormulaCell, isNewer, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
   RaindownServer, runRaindown, shellRaindown
 });
