@@ -1,14 +1,25 @@
 #!/usr/bin/env bash
-# Releases the plugin: tags manifest.json's version if it isn't tagged yet, like the first release, or else bumps it
-# with npm version, patch by default, or minor or major, then pushes main and the tag, which runs the release workflow.
+# Releases the plugin: tags manifest.json's version if it isn't tagged yet, like the first release, or else bumps the
+# minor version with npm version, like 0.1.0 to 0.2.0, or with --patch or -p the patch version, like 0.1.0 to 0.1.1, or
+# with --major the major version, like 0.1.0 to 1.0.0, then pushes main and the tag, which runs the release workflow.
+#   bin/bump
+#   bin/bump --patch
+#   bin/bump --major
 set -euo pipefail
 cd "$(dirname "$0")/.."
+
+case "${1:-}" in
+  '') level=minor ;;
+  --patch | -p) level=patch ;;
+  --major) level=major ;;
+  *) echo "Unknown option: $1. Use --patch, -p or --major." >&2; exit 1 ;;
+esac
 
 git diff --quiet HEAD || { echo 'Commit your changes first, so the release has them.' >&2; exit 1; }
 
 version=$(node -p "require('./manifest.json').version")
 if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
-  npm version "${1:-patch}"
+  npm version "$level"
 else
   # Annotated, like npm version's tags, as --follow-tags only pushes those.
   git tag --annotate "$version" --message "$version"
