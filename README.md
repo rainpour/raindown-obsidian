@@ -1,6 +1,6 @@
 # Raindown for Obsidian
 
-A Markdown-superset tailored for Obsidian with some additional features:
+A [Markdown-superset](https://raindown.dev/) with features tailored for Obsidian.
 
 ## Features
 
@@ -25,7 +25,7 @@ order: 1
 
 ### List
 
-[`list:`](/docs/list) writes a link to each note with a tag or in a folder, like `list: tags: 'book'`
+[`list:`](https://raindown.dev/docs/list) writes a link to each note with a tag or in a folder, like `list: tags: 'book'`
 
 ````md
 list: tags: 'book'
@@ -35,7 +35,7 @@ list: tags: 'book'
 
 ### Table
 
-[`table:`](/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
+[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
 
 ````md
 table: 'data/books.csv'
@@ -48,7 +48,7 @@ table: 'data/books.csv'
 
 ### Charts
 
-[`chart:`](/docs/chart) draws a CSV, TSV, JSON or YAML file in your vault.
+[`chart:`](https://raindown.dev/docs/chart) draws a CSV, TSV, JSON or YAML file in your vault.
 
 ````md
 chart: 'data/reading.csv'
@@ -61,7 +61,7 @@ Mar  █████████████████████████
 
 ### Table of contents
 
-[`toc:`](/docs/toc) writes an inline TOC which updates as you add and rename headings.
+[`toc:`](https://raindown.dev/docs/toc) writes an inline TOC which updates as you add and rename headings.
 
 ````md
 # Books
@@ -77,13 +77,31 @@ toc:
 
 ### Components
 
-A note in your vault's `.raindown` folder, like `BookCard.md`, is a [component](/docs/components#markdown) with no code, a template whose properties fill its `{variables}`, like `BookCard: title: Dune rating: 5`.
+A note in your vault's `.raindown` folder, like `BookCard.md`, is a [component](https://raindown.dev/docs/components#markdown) with no code, a template whose properties fill its `{variables}`, like `BookCard: title: Dune rating: 5`.
 
-## Install
+## Installation
+
+### The plugin
 
 Install [Raindown](https://community.obsidian.md/plugins/raindown) from Obsidian's community plugins: in **Settings → Community plugins**, select **Browse**, search for **Raindown**, select **Install**, then **Enable**.
 
-The plugin also needs the `raindown` program, which it can't install for you. If it can't find one, it shows the command to paste into a terminal. See [Requirements](#requirements).
+### The program
+
+The plugin needs the `raindown` program, which it can't install for you. Paste one of these commands into a terminal and press Return. It takes about a minute, and running it again updates Raindown. Then select **Check again**, or run **Raindown: Find Raindown** from the command palette.
+
+**macOS and Linux:** open **Terminal**, which you can find on a Mac by pressing Cmd + Space and typing `Terminal`, or on Linux by pressing Ctrl + Alt + T or searching your apps for `Terminal`, then run:
+
+```sh
+curl -fsSL https://raindown.dev/install.sh | sh
+```
+
+**Windows:** open **PowerShell**, which you can find by pressing the Windows key and typing `PowerShell`, then run this. To update, close Obsidian first, as Windows can't replace a program that's running.
+
+```powershell
+irm https://raindown.dev/install.ps1 | iex
+```
+
+Both check the download against the release's checksums. You can read them first, at [install.sh](https://raindown.dev/install.sh) and [install.ps1](https://raindown.dev/install.ps1), or [download a binary yourself, or install the gem](https://raindown.dev/docs/cli#installation).
 
 ## Settings
 
@@ -99,19 +117,19 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 
 ## Commands
 
-| Command                                      | Does                                                                |
-| -------------------------------------------- | ------------------------------------------------------------------- |
-| **Raindown: Write back this note**           | Writes back now, and says what happened                             |
-| **Raindown: Run the endpoints in this note** | Runs the [endpoints](/docs/endpoints) without a response, like `-x` |
-| **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed   |
-| **Raindown: Find Raindown**                  | Looks for Raindown again, once you've installed it                  |
+| Command                                      | Does                                                                                   |
+| -------------------------------------------- | -------------------------------------------------------------------------------------- |
+| **Raindown: Write back this note**           | Writes back now, and says what happened                                                |
+| **Raindown: Run the endpoints in this note** | Runs the [endpoints](https://raindown.dev/docs/endpoint) without a response, like `-x` |
+| **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed                      |
+| **Raindown: Find Raindown**                  | Looks for Raindown again, once you've installed it                                     |
 
 > [!NOTE]
-> Unlike the [CLI](/docs/cli) endpoints in Obsidian never run on save, only via the command.
+> Unlike the [CLI](https://raindown.dev/docs/cli) endpoints in Obsidian never run on save, only via the command.
 
 ## Requirements
 
-The `raindown` executable, which you [install yourself](https://raindown.dev/docs/install) by pasting one command into a terminal, or with `gem install raindown`. Running that command again updates it. The plugin never installs or updates it, as Obsidian's developer policies don't allow that.
+The `raindown` executable, which you [install yourself](#the-raindown-program). The plugin never installs or updates it, as Obsidian's developer policies don't allow that.
 
 The first time the plugin can't find it, it looks in `~/.local/bin`, or `%LOCALAPPDATA%\Programs\raindown` on Windows, and on your shell's `PATH`, which Obsidian opened from the Dock doesn't have. If it's not there either, it shows the command to run, and **Check again** or **Raindown: Find Raindown** looks again once you have. You can also set the plugin's **Raindown command** to its full path.
 

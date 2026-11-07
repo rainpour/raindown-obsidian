@@ -19,7 +19,7 @@ const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
 const MAX_BUFFER = 32 * 1024 * 1024;
-const INSTALL_URL = 'https://raindown.dev/docs/install';
+const INSTALL_URL = 'https://raindown.dev/docs/obsidian#install';
 // Notes listing others, which a note being added, renamed or removed changes.
 const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})list:/m;
 // Raindown's directives, for completing their names. A project's own nodes in .raindown/ are added to them.
