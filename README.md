@@ -102,25 +102,20 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 | **Raindown: Write back this note**           | Writes back now, and says what happened                             |
 | **Raindown: Run the endpoints in this note** | Runs the [endpoints](/docs/endpoints) without a response, like `-x` |
 | **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed   |
-| **Raindown: Download Raindown**              | Downloads the latest standalone binary, or updates it now           |
+| **Raindown: Find Raindown**                  | Looks for Raindown again, once you've installed it                  |
 
 > [!NOTE]
 > Unlike the [CLI](/docs/cli) endpoints in Obsidian never run on save, only via the command.
 
 ## Requirements
 
-The `raindown` executable. The first time the plugin can't find it, it looks on your shell's `PATH`, which Obsidian opened from the Dock doesn't have, and if it's not there either, offers to download the [standalone binary](https://raindown.dev/docs/getting-started#installation) from GitHub, checked against the release's checksums, to `~/.local/bin/raindown`, or `%LOCALAPPDATA%\Programs\raindown` on Windows, outside your vault so it isn't synced. It's only downloaded if you say so. Once a day at most, a binary it downloaded is checked against the latest release, and it asks before updating it. Turning an update down skips that release.
+The `raindown` executable, which you [install yourself](https://raindown.dev/docs/install) by pasting one command into a terminal, or with `gem install raindown`. Running that command again updates it. The plugin never installs or updates it, as Obsidian's developer policies don't allow that.
 
-It can also come from `gem install raindown`, or set the plugin's **Raindown command** to its full path. It's desktop only, as Obsidian on phones can't run Raindown.
+The first time the plugin can't find it, it looks in `~/.local/bin`, or `%LOCALAPPDATA%\Programs\raindown` on Windows, and on your shell's `PATH`, which Obsidian opened from the Dock doesn't have. If it's not there either, it shows the command to run, and **Check again** or **Raindown: Find Raindown** looks again once you have. You can also set the plugin's **Raindown command** to its full path.
+
+It's desktop only, as Obsidian on phones can't run Raindown.
 
 ## Files and network
 
-The plugin goes outside your vault for these reasons:
-
-- **Saving the binary** - It uses Node's `fs` module to save the standalone binary outside your vault, as Obsidian's vault API can only write inside it, and a binary in your vault would be synced to your other devices. It only checks that `raindown` exists and writes it, and only writes it if you agree to the download or an update.
-- **Running Raindown** - Raindown is a separate program, so the plugin runs it to write back to your notes. Like any program you run, it isn't limited to your vault. However the plugin only requests to process file paths inside your vault.
-
-It uses the network for these reasons:
-
-- **GitHub** - It downloads the binary and its checksums from Raindown's releases if you agree, and checks for a new release once a day at most if it downloaded the binary.
-- **Endpoints** - Raindown calls the URLs in a note's endpoints when you run **Raindown: Run the endpoints in this note**.
+- **Running Raindown** - Raindown is a separate program, so the plugin runs it to write back to your notes, and starts your shell once to find it on your `PATH`. Like any program you run, Raindown isn't limited to your vault, but the plugin only gives it file paths inside your vault.
+- **Network** - The plugin doesn't use the network itself. Raindown calls the URLs in a note's endpoints when you run **Raindown: Run the endpoints in this note**, and your vault's own nodes in `.raindown` are code that can use it too.

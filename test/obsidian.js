@@ -43,11 +43,9 @@ class EditorSuggest {
 class PluginSettingTab {}
 class Setting {}
 
-async function requestUrl() { throw new Error('Tests pass their own request'); }
-
 const editorInfoField = {};
 const sanitizeHTMLToDom = (html) => html;
 
 module.exports = {
-  EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, requestUrl, sanitizeHTMLToDom
+  EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, sanitizeHTMLToDom
 };

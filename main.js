@@ -3,12 +3,10 @@
 // Raindown for Obsidian: as a note's saved, Raindown writes back to it, like `raindown watch`, filling in its tables of
 // contents, file lists, components and charts. Obsidian loads this one file, so it has no build step.
 const childProcess = require('child_process');
-const crypto = require('crypto');
-const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const {
-  EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, requestUrl, sanitizeHTMLToDom
+  EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, sanitizeHTMLToDom
 } = require('obsidian');
 
 const DEFAULT_SETTINGS = { command: 'raindown', writeBack: true, bareSyntax: false };
@@ -21,9 +19,7 @@ const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
 const MAX_BUFFER = 32 * 1024 * 1024;
-const RELEASES = 'https://github.com/rainpour/raindown/releases';
-const LATEST_RELEASE = 'https://api.github.com/repos/rainpour/raindown/releases/latest';
-const DAY = 24 * 60 * 60 * 1000;
+const INSTALL_URL = 'https://raindown.dev/docs/install';
 // Notes listing others, which a note being added, renamed or removed changes.
 const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})list:/m;
 // Raindown's directives, for completing their names. A project's own nodes in .raindown/ are added to them.
@@ -118,13 +114,13 @@ function expandCommand(command) {
 
 function errorMessage(error, stderr, command) {
   if (error.code === 'ENOENT') {
-    return `Couldn't run "${command}". Run "Raindown: Download Raindown", or set its full path in the plugin's ` +
-      "settings, since Obsidian doesn't always see your shell's PATH.";
+    return `Couldn't run "${command}". Install it from ${INSTALL_URL}, then run "Raindown: Find Raindown", or set its ` +
+      "full path in the plugin's settings, since Obsidian doesn't always see your shell's PATH.";
   }
 
   // Raindown before --rewrite doesn't know it.
   if (stderr.startsWith('Unknown arguments') && stderr.includes('--rewrite')) {
-    return 'This Raindown is too old for the plugin. Update it, or run "Raindown: Download Raindown".';
+    return `This Raindown is too old for the plugin. Update it from ${INSTALL_URL}`;
   }
 
   return stderr.trim() || error.message;
@@ -228,32 +224,20 @@ class RaindownServer {
   stop() {
     this.child?.kill();
   }
-
-  // Resolves once it's stopped, as Windows can't replace a binary that's running.
-  stopAndWait() {
-    if (!this.child?.pid) return Promise.resolve();
-
-    return new Promise((stopped) => {
-      this.child.once('exit', stopped);
-      this.child.kill();
-    });
-  }
 }
 
-// The standalone binary released for this computer, like raindown-macos-arm64, or null if there isn't one.
-function binaryName(platform = process.platform, arch = process.arch, musl = !process.report?.getReport().header.glibcVersionRuntime) {
-  const cpu = { x64: 'x86_64', arm64: 'arm64' }[arch];
-  const system = { darwin: 'macos', linux: musl ? 'linux-musl' : 'linux', win32: 'windows' }[platform];
-  if (!cpu || !system || (system === 'windows' && cpu !== 'x86_64')) return null;
-
-  return `raindown-${system}-${cpu}${system === 'windows' ? '.exe' : ''}`;
-}
-
-// Where a downloaded binary goes: outside the vault, so it isn't synced, and where a shell finds it too.
+// Where the standalone binary's usually installed, which Obsidian opened from the Dock doesn't look in.
 function binaryPath(platform = process.platform) {
   if (platform === 'win32') return path.join(process.env.LOCALAPPDATA || os.homedir(), 'Programs', 'raindown', 'raindown.exe');
 
   return path.join(os.homedir(), '.local', 'bin', 'raindown');
+}
+
+// The command to paste into a terminal, which installs Raindown, or updates it.
+function installCommand(platform = process.platform) {
+  if (platform === 'win32') return 'irm https://raindown.dev/install.ps1 | iex';
+
+  return 'curl -fsSL https://raindown.dev/install.sh | sh';
 }
 
 // Raindown on the PATH of a login shell, which Obsidian opened from the Dock doesn't have, like a gem installed with
@@ -275,34 +259,6 @@ async function firstRunning(commands) {
   }
 
   return null;
-}
-
-// Downloads a release's binary to file, the latest one without a tag, once it matches the checksum the release lists.
-// beforeReplacing runs just before it's moved into place, so nothing's using the old one by then.
-async function downloadRaindown(name, file, { tag, request = requestUrl, beforeReplacing = () => {} } = {}) {
-  const release = tag ? `${RELEASES}/download/${tag}` : `${RELEASES}/latest/download`;
-  const sums = (await request({ url: `${release}/SHA256SUMS` })).text;
-  const expected = sums.split('\n').map((line) => line.trim().split(/\s+\*?/)).find(([, listed]) => listed === name)?.[0];
-  if (!expected) throw new Error(`The release doesn't list a checksum for ${name}`);
-
-  const binary = Buffer.from((await request({ url: `${release}/${name}` })).arrayBuffer);
-  if (crypto.createHash('sha256').update(binary).digest('hex') !== expected) {
-    throw new Error(`${name} didn't match its checksum, so it wasn't saved`);
-  }
-
-  // Renamed into place, so the whole binary arrives at once.
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(`${file}.download`, binary, { mode: 0o755 });
-  await beforeReplacing();
-  fs.renameSync(`${file}.download`, file);
-}
-
-// Whether a release's tag, like v0.11.0, is newer than a version, like 0.10.0.
-function isNewer(tag, version) {
-  const [released, installed] = [tag, version].map((text) => text.replace(/^v/, '').split('.').map(Number));
-  const index = released.findIndex((part, i) => part !== (installed[i] || 0));
-
-  return index !== -1 && released[index] > (installed[index] || 0);
 }
 
 // Highlighting, like the VS Code extension's: directives in comments, like <!-- toc: --> and the end tag <!-- :toc -->,
@@ -530,7 +486,7 @@ class RaindownPlugin extends Plugin {
     this.addCommand({
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
     });
-    this.addCommand({ id: 'download', name: 'Download Raindown', callback: () => this.installRaindown() });
+    this.addCommand({ id: 'find', name: 'Find Raindown', callback: () => this.findInstalledRaindown() });
     this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
       if (info.file) this.scheduleWriteBack(info.file, typingDelay(editor));
     }));
@@ -547,7 +503,6 @@ class RaindownPlugin extends Plugin {
       }
       // Started now, so the first write-back doesn't wait for Raindown to load.
       if (this.settings.writeBack) this.serverFor().start();
-      this.checkForUpdate();
     });
   }
 
@@ -737,74 +692,38 @@ class RaindownPlugin extends Plugin {
     return this.app.workspace.getLeavesOfType('markdown').map((leaf) => leaf.view).find((view) => view.file?.path === file.path)?.editor;
   }
 
-  // The first time Raindown can't be found, it's looked for where it's downloaded to and on the shell's PATH, and
-  // written back with if one there runs. If not, downloading it is offered, once, and only done if it's asked for.
+  // The first time Raindown can't be found, it's looked for where it's usually installed and on the shell's PATH, and
+  // written back with if one there runs. If not, how to install it is shown, once. The plugin never installs it itself,
+  // as Obsidian's developer policies don't allow that.
   async findRaindown(file, { notify }) {
     if (this.searched) return;
 
     this.searched = true;
-    const found = await firstRunning([fs.existsSync(binaryPath()) && binaryPath(), await shellRaindown()]);
-    if (!found) {
-      if (binaryName()) this.ask({
-        title: 'Download Raindown?',
-        text: `Raindown isn't installed, or Obsidian can't find one that runs. Download it from GitHub to ${binaryPath()}?`,
-        action: 'Download',
-        confirm: () => this.installRaindown()
-      });
-      return;
-    }
-
-    await this.useRaindown(found);
-    await this.writeBack(file, { notify });
+    if (await this.useInstalledRaindown()) await this.writeBack(file, { notify });
+    else new InstallModal(this.app, () => this.findInstalledRaindown()).open();
   }
 
-  // Once a day at most, a binary the plugin downloaded is checked against the latest release, and updated if that's
-  // asked for. Turning an update down skips that release. Offline, it's checked again the next day.
-  async checkForUpdate(request = requestUrl) {
-    if (this.settings.command !== binaryPath() || Date.now() - (this.settings.checkedAt || 0) < DAY) return;
+  // Looks again, once it's been installed, and says what it found.
+  async findInstalledRaindown() {
+    const found = await this.useInstalledRaindown();
+    if (found) new Notice(`Found Raindown at ${this.settings.command}`);
+    else new Notice("Couldn't find Raindown");
 
-    this.settings.checkedAt = Date.now();
-    await this.saveData(this.settings);
-    try {
-      const tag = (await request({ url: LATEST_RELEASE })).json.tag_name;
-      const { output: installed } = await runRaindown(binaryPath(), ['--version'], '', { timeout: TIMEOUT });
-      if (tag === this.settings.skippedTag || !isNewer(tag, installed.trim())) return;
-
-      this.ask({
-        title: 'Update Raindown?',
-        text: `Raindown ${tag.replace(/^v/, '')} is out, and you have ${installed.trim()}. Update it?`,
-        action: 'Update',
-        confirm: () => this.installRaindown(tag),
-        cancel: async () => {
-          this.settings.skippedTag = tag;
-          await this.saveData(this.settings);
-        }
-      });
-    } catch {
-      // GitHub or the binary didn't answer, so there's nothing to offer.
-    }
+    return found;
   }
 
-  ask(options) {
-    new ConfirmModal(this.app, options).open();
+  // Whether a Raindown that runs was found, which is then the one used.
+  async useInstalledRaindown() {
+    const found = await firstRunning([binaryPath(), await shellRaindown()]);
+    if (found) await this.useRaindown(found);
+
+    return Boolean(found);
   }
 
-  async installRaindown(tag) {
-    const name = binaryName();
-    if (!name) return new Notice('There\'s no Raindown binary for this computer. Install it with "gem install raindown".');
-
-    try {
-      new Notice('Downloading Raindown…');
-      await downloadRaindown(name, binaryPath(), { tag, beforeReplacing: () => this.server?.stopAndWait() });
-      this.server = null; // The next write-back starts the new binary.
-      await this.useRaindown(binaryPath());
-      new Notice(`Raindown is downloaded to ${binaryPath()}`);
-    } catch (error) {
-      new Notice(`Couldn't download Raindown: ${error.message}`);
-    }
-  }
-
+  // A server that couldn't start before it was installed isn't asked again, so the next write-back starts a new one.
   async useRaindown(command) {
+    this.server?.stop();
+    this.server = null;
     this.settings.command = command;
     await this.saveData(this.settings);
   }
@@ -822,24 +741,27 @@ class RaindownPlugin extends Plugin {
   }
 }
 
-// Asks before downloading anything, with the action, like Download, and Not now.
-class ConfirmModal extends Modal {
-  constructor(app, { title, text, action, confirm, cancel = () => {} }) {
+// Shows how to install Raindown, and looks for it again once that's done.
+class InstallModal extends Modal {
+  constructor(app, check) {
     super(app);
-    Object.assign(this, { title, text, action, confirm, cancel });
+    this.check = check;
   }
 
   onOpen() {
-    this.titleEl.setText(this.title);
-    this.contentEl.createEl('p', { text: this.text });
+    this.titleEl.setText('Install Raindown');
+    this.contentEl.createEl('p', { text: "This plugin needs the raindown program, and Obsidian can't find one that runs." });
+    this.contentEl.createEl('p', { text: 'To install it, paste this into a terminal, then select Check again:' });
+    this.contentEl.createEl('pre').createEl('code', { text: installCommand() });
+    this.contentEl.createEl('a', { text: 'More ways to install Raindown', href: INSTALL_URL });
     new Setting(this.contentEl)
-      .addButton((button) => button.setButtonText('Not now').onClick(() => {
-        this.close();
-        this.cancel();
+      .addButton((button) => button.setButtonText('Not now').onClick(() => this.close()))
+      .addButton((button) => button.setButtonText('Copy').onClick(async () => {
+        await navigator.clipboard.writeText(installCommand());
+        new Notice('Copied');
       }))
-      .addButton((button) => button.setButtonText(this.action).setCta().onClick(() => {
-        this.close();
-        this.confirm();
+      .addButton((button) => button.setButtonText('Check again').setCta().onClick(async () => {
+        if (await this.check()) this.close();
       }));
   }
 
@@ -881,7 +803,7 @@ class RaindownSettingTab extends PluginSettingTab {
 
 module.exports = RaindownPlugin;
 Object.assign(module.exports, {
-  applyRewrite, binaryName, binaryPath, changedLines, changedRange, directiveTokens, downloadRaindown, errorLine, errorMessage, expandCommand,
-  DirectiveSuggest, hasDirectives, inFormulaCell, isNewer, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
+  applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
+  DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
   RaindownServer, runRaindown, shellRaindown
 });

@@ -1,7 +1,6 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const crypto = require('node:crypto');
 const fs = require('node:fs');
 const Module = require('node:module');
 const os = require('node:os');
@@ -175,14 +174,31 @@ test("shows Raindown's errors in the status bar, and in a notice from a command"
   assert.match(Notice.messages.at(-1), /^Couldn't run "\/nowhere\/raindown"/);
 });
 
-test("offers to download Raindown once, when it can't be found", async () => {
+test("shows how to install Raindown once, when it can't be found", async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command: '/nowhere/raindown' });
 
   const opened = Modal.opened.length;
   await raindown.writeBack(file, { notify: true });
   await raindown.writeBack(file, { notify: true });
-  assert.equal(Modal.opened.length - opened, RaindownPlugin.binaryName() ? 1 : 0);
+  assert.equal(Modal.opened.length - opened, 1);
+});
+
+test('finds Raindown once it has been installed, and starts a new server for it', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command: '/nowhere/raindown' });
+  await raindown.writeBack(file, { notify: true });
+  const { check } = Modal.opened.at(-1);
+  const stale = raindown.server;
+
+  assert.equal(await check(), false);
+  const found = fakeRaindown(dir, FILL_TOC);
+  process.env.SHELL = fakeShell(found);
+  assert.equal(await check(), true);
+  process.env.SHELL = fakeShell('');
+
+  assert.equal(raindown.settings.command, found);
+  assert.notEqual(raindown.server, stale);
 });
 
 test("uses Raindown from the shell's PATH when Obsidian can't find it", async () => {
@@ -223,93 +239,14 @@ test('changes an open note in its editor, with unsaved typing, only where it cha
   assert.deepEqual(RaindownPlugin.changedRange('aa', 'aaa'), { from: 2, to: 2, text: 'a' });
 });
 
-test('picks the binary released for the computer', () => {
-  assert.equal(RaindownPlugin.binaryName('darwin', 'arm64', false), 'raindown-macos-arm64');
-  assert.equal(RaindownPlugin.binaryName('linux', 'x64', true), 'raindown-linux-musl-x86_64');
-  assert.equal(RaindownPlugin.binaryName('win32', 'x64', false), 'raindown-windows-x86_64.exe');
-  assert.equal(RaindownPlugin.binaryName('win32', 'arm64', false), null);
+test('offers the install command for the computer', () => {
+  assert.equal(RaindownPlugin.installCommand('darwin'), 'curl -fsSL https://raindown.dev/install.sh | sh');
+  assert.equal(RaindownPlugin.installCommand('linux'), 'curl -fsSL https://raindown.dev/install.sh | sh');
+  assert.equal(RaindownPlugin.installCommand('win32'), 'irm https://raindown.dev/install.ps1 | iex');
+});
+
+test('looks for the standalone binary where it is usually installed', () => {
   assert.equal(RaindownPlugin.binaryPath('darwin'), path.join(process.env.HOME, '.local', 'bin', 'raindown'));
-});
-
-test('only saves a download that matches the checksum the release lists', async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'bin', 'raindown');
-  const binary = Buffer.from('#!/bin/sh\n');
-  const sum = crypto.createHash('sha256').update(binary).digest('hex');
-  const request = (sums) => async ({ url }) => {
-    if (url.endsWith('/SHA256SUMS')) return { text: sums };
-
-    return { arrayBuffer: binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.length) };
-  };
-
-  await assert.rejects(RaindownPlugin.downloadRaindown('raindown-macos-arm64', file, { request: request(`${'0'.repeat(64)}  raindown-macos-arm64\n`) }),
-    /didn't match its checksum/);
-  await assert.rejects(RaindownPlugin.downloadRaindown('raindown-macos-arm64', file, { request: request('') }), /doesn't list a checksum/);
-  assert.ok(!fs.existsSync(file));
-
-  await RaindownPlugin.downloadRaindown('raindown-macos-arm64', file, { request: request(`${sum}  raindown-linux-x86_64\n${sum}  raindown-macos-arm64\n`) });
-  assert.deepEqual(fs.readFileSync(file), binary);
-  assert.equal(fs.statSync(file).mode & 0o111, 0o111);
-});
-
-test('replaces a binary only once whatever is using it has stopped', async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown');
-  const binary = Buffer.from('new');
-  const sum = crypto.createHash('sha256').update(binary).digest('hex');
-  const request = async ({ url }) => {
-    if (url.endsWith('/SHA256SUMS')) return { text: `${sum}  raindown-macos-arm64\n` };
-
-    return { arrayBuffer: binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.length) };
-  };
-  let replacing;
-  fs.writeFileSync(file, 'old');
-
-  await RaindownPlugin.downloadRaindown('raindown-macos-arm64', file, {
-    request, beforeReplacing: async () => { replacing = fs.readFileSync(file, 'utf8'); }
-  });
-
-  assert.equal(replacing, 'old');
-  assert.equal(fs.readFileSync(file, 'utf8'), 'new');
-});
-
-test('waits for the server to stop, whether or not it is running', async () => {
-  const server = new RaindownPlugin.RaindownServer(fakeServer(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'))).command);
-  await server.stopAndWait();
-
-  await server.start();
-  const { child } = server;
-  await server.stopAndWait();
-
-  assert.ok(child.exitCode !== null || child.signalCode !== null);
-  assert.equal(server.child, null);
-});
-
-test('offers a newer release for a downloaded binary, once a day, and not again once turned down', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const binary = RaindownPlugin.binaryPath();
-  fs.mkdirSync(path.dirname(binary), { recursive: true });
-  fs.writeFileSync(binary, "#!/bin/sh\necho '0.10.0'\n", { mode: 0o755 });
-  const { raindown } = await plugin({ dir, content: '', command: binary });
-  const request = async () => ({ json: { tag_name: 'v0.11.0' } });
-  const opened = Modal.opened.length;
-
-  await raindown.checkForUpdate(request);
-  assert.equal(Modal.opened.at(-1).text, 'Raindown 0.11.0 is out, and you have 0.10.0. Update it?');
-
-  await raindown.checkForUpdate(request);
-  assert.equal(Modal.opened.length - opened, 1);
-
-  await Modal.opened.at(-1).cancel();
-  raindown.settings.checkedAt = 0;
-  await raindown.checkForUpdate(request);
-  assert.equal(Modal.opened.length - opened, 1);
-  fs.rmSync(binary);
-});
-
-test('compares release tags with versions', () => {
-  assert.ok(RaindownPlugin.isNewer('v0.11.0', '0.10.0'));
-  assert.ok(RaindownPlugin.isNewer('v1.0', '0.10.9'));
-  assert.ok(!RaindownPlugin.isNewer('v0.10.0', '0.10.0'));
-  assert.ok(!RaindownPlugin.isNewer('v0.9.9', '0.10.0'));
 });
 
 function highlighted(text, options) {
