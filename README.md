@@ -1,6 +1,6 @@
 # Raindown for Obsidian
 
-The Obsidian plugin enables the Raindown superset in Obsidian with some additional features:
+A Markdown-superset tailored for Obsidian with some additional features:
 
 ## Features
 
@@ -86,13 +86,13 @@ The plugin isn't in Obsidian's community plugins yet. Copy `main.js`, `manifest.
 
 ## Settings
 
-| Setting                           | Default    | Description                                                                |
-| --------------------------------- | ---------- | -------------------------------------------------------------------------- |
-| **Raindown command**              | `raindown` | The raindown executable, or its full path                                  |
-| **Write back on save**            | On         | Write back to a note with directives once you stop typing                  |
-| **Bare directives in every note** | Off        | Directives on their own line, like `toc:`, in every note, as with `--bare` |
+| Setting              | Default    | Description                                                                          |
+| -------------------- | ---------- | ------------------------------------------------------------------------------------ |
+| **Raindown command** | `raindown` | The raindown executable, or its full path                                            |
+| **Write-back**       | On         | Write back to a note with directives once you stop typing                            |
+| **Bare syntax**      | Off        | Recognise bare directives on their own line like `toc:` (equivalent to CLI `--bare`) |
 
-A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare directives in every note** is on. Only names Raindown knows, like `toc:`, `list:` and your project's nodes, write anything, so a line like `Summary:` is left alone, but a line like `list:` that's only text gets a file list.
+A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare syntax** is on. Only names Raindown knows like `toc:`, `list:` and your project's nodes write anything, so a line like `Summary:` is left alone.
 
 Adding, renaming or removing a note writes back the notes with lists, like `list:`, so they don't go stale.
 

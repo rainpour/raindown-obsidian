@@ -11,7 +11,7 @@ const {
   EditorSuggest, FileSystemAdapter, Modal, Notice, Plugin, PluginSettingTab, Setting, editorInfoField, requestUrl, sanitizeHTMLToDom
 } = require('obsidian');
 
-const DEFAULT_SETTINGS = { command: 'raindown', writeBackOnSave: true, bare: false };
+const DEFAULT_SETTINGS = { command: 'raindown', writeBack: true, bareSyntax: false };
 // A note's written back once typing in it pauses this long, before Obsidian's even saved it, or once a change from
 // outside the editor, like a sync, has been saved for DELAY. Typing a formula in a table waits for DELAY too, as
 // =sum(c) is already whole on the way to =sum(cost), with Obsidian closing its bracket.
@@ -421,7 +421,7 @@ function highlighting(plugin) {
     const builder = new RangeSetBuilder();
     const line = errorFor(view);
     const markdown = view.state.doc.toString();
-    const ranges = [...directiveTokens(markdown, { bare: plugin.settings.bare }), ...tableLines(markdown)];
+    const ranges = [...directiveTokens(markdown, { bare: plugin.settings.bareSyntax }), ...tableLines(markdown)];
     if (line && line <= view.state.doc.lines) ranges.unshift({ from: view.state.doc.line(line).from, type: 'error' });
 
     for (const { from, to, type } of ranges.sort((a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1))) {
@@ -468,7 +468,7 @@ class DirectiveSuggest extends EditorSuggest {
 
   onTrigger(cursor, editor, file) {
     const before = editor.getLine(cursor.line).slice(0, cursor.ch);
-    const bare = this.plugin.settings.bare || this.app.metadataCache.getFileCache(file)?.frontmatter?.raindown === true;
+    const bare = this.plugin.settings.bareSyntax || this.app.metadataCache.getFileCache(file)?.frontmatter?.raindown === true;
     const match = /(?:<!--\s*|<\{\s*)([A-Za-z][\w-]*)$/.exec(before) || (bare && /^ {0,3}([A-Za-z][\w-]*)$/.exec(before));
     if (!match) return null;
 
@@ -534,7 +534,7 @@ class RaindownPlugin extends Plugin {
         this.registerEvent(this.app.vault.on(event, (file) => this.scheduleListsWriteBack(file)));
       }
       // Started now, so the first write-back doesn't wait for Raindown to load.
-      if (this.settings.writeBackOnSave) this.serverFor().start();
+      if (this.settings.writeBack) this.serverFor().start();
       this.checkForUpdate();
     });
   }
@@ -557,7 +557,7 @@ class RaindownPlugin extends Plugin {
   // Raindown's answer, through its server when it has one, or else from running it once, as { output, warnings }.
   async raindown({ file, markdown, rewrite = false, execute = false, timeout = TIMEOUT }) {
     const filePath = this.absolutePath(file);
-    const bare = this.settings.bare;
+    const bare = this.settings.bareSyntax;
     const answer = await this.serverFor().request({ path: filePath, markdown, rewrite, execute, bare }, { timeout });
     if (answer) return { output: answer.output, warnings: (answer.warnings ?? []).join('\n') };
 
@@ -574,7 +574,7 @@ class RaindownPlugin extends Plugin {
   }
 
   scheduleWriteBack(file, delay = DELAY) {
-    if (!this.settings.writeBackOnSave || file.extension !== 'md') return;
+    if (!this.settings.writeBack || file.extension !== 'md') return;
 
     clearTimeout(this.timers.get(file.path));
     this.timers.set(file.path, setTimeout(() => {
@@ -603,7 +603,7 @@ class RaindownPlugin extends Plugin {
 
   // A note added, renamed or removed changes the lists in other notes, like list:, so they're written back.
   scheduleListsWriteBack(file) {
-    if (!this.settings.writeBackOnSave || file.extension !== 'md') return;
+    if (!this.settings.writeBack || file.extension !== 'md') return;
 
     clearTimeout(this.listsTimer);
     this.listsTimer = setTimeout(() => this.writeBackAll((markdown) => LISTS.test(markdown)), DELAY);
@@ -846,18 +846,14 @@ class RaindownSettingTab extends PluginSettingTab {
 
     new Setting(containerEl)
       .setName('Raindown command')
-      .setDesc('The raindown gem or a standalone binary. Use its full path, like ~/.local/bin/raindown, ' +
-        "if Obsidian can't find it.")
+      .setDesc('The raindown executable, or its full path')
       .addText((text) => text.setPlaceholder('raindown').setValue(this.plugin.settings.command).onChange(async (value) => {
         this.plugin.settings.command = value.trim() || DEFAULT_SETTINGS.command;
         await this.plugin.saveData(this.plugin.settings);
       }));
 
-    this.addToggle('writeBackOnSave', 'Write back on save',
-      'Write back to a note with directives once you stop typing. Endpoints only run from the command.');
-    this.addToggle('bare', 'Bare directives in every note',
-      'Write back to directives on their own line, like toc:, in every note, not only ones with "raindown: true" in ' +
-      'their front matter. A line like list: that\'s only text gets a file list.');
+    this.addToggle('writeBack', 'Write-back', 'Write back to a note with directives once you stop typing');
+    this.addToggle('bareSyntax', 'Bare syntax', 'Recognise bare directives on their own line like toc: (equivalent to CLI --bare)');
   }
 
   addToggle(key, name, description) {
