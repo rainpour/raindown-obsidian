@@ -251,6 +251,38 @@ test('only saves a download that matches the checksum the release lists', async 
   assert.equal(fs.statSync(file).mode & 0o111, 0o111);
 });
 
+test('replaces a binary only once whatever is using it has stopped', async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown');
+  const binary = Buffer.from('new');
+  const sum = crypto.createHash('sha256').update(binary).digest('hex');
+  const request = async ({ url }) => {
+    if (url.endsWith('/SHA256SUMS')) return { text: `${sum}  raindown-macos-arm64\n` };
+
+    return { arrayBuffer: binary.buffer.slice(binary.byteOffset, binary.byteOffset + binary.length) };
+  };
+  let replacing;
+  fs.writeFileSync(file, 'old');
+
+  await RaindownPlugin.downloadRaindown('raindown-macos-arm64', file, {
+    request, beforeReplacing: async () => { replacing = fs.readFileSync(file, 'utf8'); }
+  });
+
+  assert.equal(replacing, 'old');
+  assert.equal(fs.readFileSync(file, 'utf8'), 'new');
+});
+
+test('waits for the server to stop, whether or not it is running', async () => {
+  const server = new RaindownPlugin.RaindownServer(fakeServer(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'))).command);
+  await server.stopAndWait();
+
+  await server.start();
+  const { child } = server;
+  await server.stopAndWait();
+
+  assert.ok(child.exitCode !== null || child.signalCode !== null);
+  assert.equal(server.child, null);
+});
+
 test('offers a newer release for a downloaded binary, once a day, and not again once turned down', async () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const binary = RaindownPlugin.binaryPath();

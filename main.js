@@ -228,6 +228,16 @@ class RaindownServer {
   stop() {
     this.child?.kill();
   }
+
+  // Resolves once it's stopped, as Windows can't replace a binary that's running.
+  stopAndWait() {
+    if (!this.child?.pid) return Promise.resolve();
+
+    return new Promise((stopped) => {
+      this.child.once('exit', stopped);
+      this.child.kill();
+    });
+  }
 }
 
 // The standalone binary released for this computer, like raindown-macos-arm64, or null if there isn't one.
@@ -268,7 +278,8 @@ async function firstRunning(commands) {
 }
 
 // Downloads a release's binary to file, the latest one without a tag, once it matches the checksum the release lists.
-async function downloadRaindown(name, file, { tag, request = requestUrl } = {}) {
+// beforeReplacing runs just before it's moved into place, so nothing's using the old one by then.
+async function downloadRaindown(name, file, { tag, request = requestUrl, beforeReplacing = () => {} } = {}) {
   const release = tag ? `${RELEASES}/download/${tag}` : `${RELEASES}/latest/download`;
   const sums = (await request({ url: `${release}/SHA256SUMS` })).text;
   const expected = sums.split('\n').map((line) => line.trim().split(/\s+\*?/)).find(([, listed]) => listed === name)?.[0];
@@ -279,9 +290,10 @@ async function downloadRaindown(name, file, { tag, request = requestUrl } = {}) 
     throw new Error(`${name} didn't match its checksum, so it wasn't saved`);
   }
 
-  // Renamed into place, so updating never writes over a binary that's running.
+  // Renamed into place, so the whole binary arrives at once.
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(`${file}.download`, binary, { mode: 0o755 });
+  await beforeReplacing();
   fs.renameSync(`${file}.download`, file);
 }
 
@@ -782,7 +794,8 @@ class RaindownPlugin extends Plugin {
 
     try {
       new Notice('Downloading Raindown…');
-      await downloadRaindown(name, binaryPath(), { tag });
+      await downloadRaindown(name, binaryPath(), { tag, beforeReplacing: () => this.server?.stopAndWait() });
+      this.server = null; // The next write-back starts the new binary.
       await this.useRaindown(binaryPath());
       new Notice(`Raindown is downloaded to ${binaryPath()}`);
     } catch (error) {
