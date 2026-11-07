@@ -27,7 +27,7 @@ const DAY = 24 * 60 * 60 * 1000;
 // Notes listing others, which a note being added, renamed or removed changes.
 const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})list:/m;
 // Raindown's directives, for completing their names. A project's own nodes in .raindown/ are added to them.
-const BUILT_INS = ['chart', 'endpoint', 'for', 'if', 'list', 'schema', 'toc'];
+const BUILT_INS = ['chart', 'endpoint', 'for', 'if', 'list', 'schema', 'table', 'toc'];
 // Each section of reading view with <{ }> in it is rendered with the whole note, between these, then picked out.
 const SECTION_START = '<!-- raindown:section -->';
 const SECTION_END = '<!-- raindown:end-section -->';

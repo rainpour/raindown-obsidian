@@ -383,6 +383,7 @@ test("completes directive names, with the project's own nodes", async () => {
   assert.equal(suggest.onTrigger({ line: 0, ch: 9 }, editor('A note to'), note), null);
   assert.deepEqual(await suggest.getSuggestions({ query: 'c', file: note }), ['chart', 'Changelog']);
   assert.deepEqual(await suggest.getSuggestions({ query: 'B', file: note }), ['BookCard']);
+  assert.deepEqual(await suggest.getSuggestions({ query: 'ta', file: note }), ['table']);
 });
 
 test('writes back through the server, and keeps each reading view section until the note changes', async () => {
