@@ -67,9 +67,8 @@ Mar  █████████████████████████
 # Books
 
 toc:
-- [Books](#books)
-  - [Reading](#reading)
-  - [Finished](#finished)
+- [Reading](#reading)
+- [Finished](#finished)
 
 ## Reading
 
@@ -113,3 +112,15 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 The `raindown` executable. The first time the plugin can't find it, it looks on your shell's `PATH`, which Obsidian opened from the Dock doesn't have, and if it's not there either, offers to download the [standalone binary](https://raindown.dev/docs/getting-started#installation) from GitHub, checked against the release's checksums, to `~/.local/bin/raindown`, or `%LOCALAPPDATA%\Programs\raindown` on Windows, outside your vault so it isn't synced. It's only downloaded if you say so. Once a day at most, a binary it downloaded is checked against the latest release, and it asks before updating it. Turning an update down skips that release.
 
 It can also come from `gem install raindown`, or set the plugin's **Raindown command** to its full path. It's desktop only, as Obsidian on phones can't run Raindown.
+
+## Files and network
+
+The plugin goes outside your vault for these reasons:
+
+- **Saving the binary** - It uses Node's `fs` module to save the standalone binary outside your vault, as Obsidian's vault API can only write inside it, and a binary in your vault would be synced to your other devices. It only checks that `raindown` exists and writes it, and only writes it if you agree to the download or an update.
+- **Running Raindown** - Raindown is a separate program, so the plugin runs it to write back to your notes. Like any program you run, it isn't limited to your vault. However the plugin only requests to process file paths inside your vault.
+
+It uses the network for these reasons:
+
+- **GitHub** - It downloads the binary and its checksums from Raindown's releases if you agree, and checks for a new release once a day at most if it downloaded the binary.
+- **Endpoints** - Raindown calls the URLs in a note's endpoints when you run **Raindown: Run the endpoints in this note**.
