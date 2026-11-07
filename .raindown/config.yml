@@ -1,0 +1,4 @@
+# Raindown project settings. See https://raindown.dev/docs/config
+#
+# Leave code blocks unhighlighted, so the browser can highlight them instead:
+# highlight_code: false
