@@ -408,6 +408,19 @@ test('writes back through the server, and keeps each reading view section until 
   raindown.onunload();
 });
 
+test("doesn't write back lists after it's unloaded", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown' });
+  let writtenBack = false;
+  raindown.writeBackAll = async () => { writtenBack = true; };
+
+  raindown.scheduleListsWriteBack(file);
+  raindown.onunload();
+  await new Promise((resolve) => { setTimeout(resolve, 1100); });
+
+  assert.equal(writtenBack, false);
+});
+
 test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 

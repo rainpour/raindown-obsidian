@@ -553,6 +553,7 @@ class RaindownPlugin extends Plugin {
 
   onunload() {
     this.timers.forEach((timer) => clearTimeout(timer));
+    clearTimeout(this.listsTimer);
     this.server?.stop();
   }
 
