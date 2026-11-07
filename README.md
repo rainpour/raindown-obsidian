@@ -81,7 +81,9 @@ A note in your vault's `.raindown` folder, like `BookCard.md`, is a [component](
 
 ## Install
 
-The plugin isn't in Obsidian's community plugins yet. Copy `main.js`, `manifest.json` and `styles.css` from the [source](https://github.com/rainpour/raindown-obsidian) into your vault's `.obsidian/plugins/raindown/` folder, then turn on **Raindown** in **Settings → Community plugins**.
+Install [Raindown](https://community.obsidian.md/plugins/raindown) from Obsidian's community plugins: in **Settings → Community plugins**, select **Browse**, search for **Raindown**, select **Install**, then **Enable**.
+
+The plugin also needs the `raindown` program, which it can't install for you. If it can't find one, it shows the command to paste into a terminal. See [Requirements](#requirements).
 
 ## Settings
 
