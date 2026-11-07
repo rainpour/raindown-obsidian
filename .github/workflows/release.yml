@@ -12,6 +12,9 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
+      artifact-metadata: write
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -20,6 +23,13 @@ jobs:
       - run: npm test
       - name: Check the tag is the manifest's version
         run: test "$GITHUB_REF_NAME" = "$(node -p "require('./manifest.json').version")"
+      # Before the release, so one that can't be verified is never published.
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
       - name: Release
         env:
           GH_TOKEN: ${{ github.token }}
