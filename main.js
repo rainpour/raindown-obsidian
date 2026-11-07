@@ -12,8 +12,8 @@ const {
 } = require('obsidian');
 
 const DEFAULT_SETTINGS = { command: 'raindown', writeBack: true, bareSyntax: false };
-// A note's written back once typing in it pauses this long, before Obsidian's even saved it, or once a change from
-// outside the editor, like a sync, has been saved for DELAY. Typing a formula in a table waits for DELAY too, as
+// A note's written back this long after each key, before Obsidian's even saved it, or once a change from outside the
+// editor, like a sync, has been saved for DELAY. Typing a formula in a table waits for DELAY too, as
 // =sum(c) is already whole on the way to =sum(cost), with Obsidian closing its bracket.
 const TYPING_DELAY = 0;
 const DELAY = 1000;
@@ -399,7 +399,7 @@ function inFormulaCell(line, ch) {
   return line.slice(start + 1, ch).trimStart().startsWith('=');
 }
 
-// How long to wait for typing in the editor to pause.
+// How long to wait after a key, before writing back.
 function typingDelay(editor) {
   const { line, ch } = editor.getCursor();
   if (inFormulaCell(editor.getLine(line), ch)) return DELAY;
@@ -866,7 +866,7 @@ class RaindownSettingTab extends PluginSettingTab {
         await this.plugin.saveData(this.plugin.settings);
       }));
 
-    this.addToggle('writeBack', 'Write-back', 'Write back to a note with directives once you stop typing');
+    this.addToggle('writeBack', 'Write-back', 'Write back to a note with directives as you type');
     this.addToggle('bareSyntax', 'Bare syntax', 'Recognise bare directives on their own line like toc: (equivalent to CLI --bare)');
   }
 

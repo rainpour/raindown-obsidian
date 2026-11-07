@@ -88,7 +88,7 @@ The plugin isn't in Obsidian's community plugins yet. Copy `main.js`, `manifest.
 | Setting              | Default    | Description                                                                          |
 | -------------------- | ---------- | ------------------------------------------------------------------------------------ |
 | **Raindown command** | `raindown` | The raindown executable, or its full path                                            |
-| **Write-back**       | On         | Write back to a note with directives once you stop typing                            |
+| **Write-back**       | On         | Write back to a note with directives as you type                                     |
 | **Bare syntax**      | Off        | Recognise bare directives on their own line like `toc:` (equivalent to CLI `--bare`) |
 
 A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare syntax** is on. Only names Raindown knows like `toc:`, `list:` and your project's nodes write anything, so a line like `Summary:` is left alone.

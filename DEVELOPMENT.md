@@ -2,7 +2,7 @@
 
 ## Architecture
 
-Once you stop typing, the plugin gives the note to Raindown's [editor server](https://raindown.dev/docs/cli#editor-server), `raindown server`, which answers with the note as Raindown would write it back. It keeps Raindown loaded, so after the first, which takes about a second, each takes a few milliseconds. With a Raindown from before it, the plugin runs `raindown NOTE --stdin --rewrite` each time instead. The plugin applies that through Obsidian, and only if the note hasn't changed since, so nothing you type is lost. A `raindown` watching a folder above the vault, like `~/dev`, leaves it alone, so the two never both write to a note. Notes without directives, like `<!-- toc: -->`, or `raindown: true` in their front matter, don't start Raindown.
+As you type, the plugin gives the note to Raindown's [editor server](https://raindown.dev/docs/cli#editor-server), `raindown server`, which answers with the note as Raindown would write it back. It keeps Raindown loaded, so after the first, which takes about a second, each takes a few milliseconds. With a Raindown from before it, the plugin runs `raindown NOTE --stdin --rewrite` each time instead. The plugin applies that through Obsidian, and only if the note hasn't changed since, so nothing you type is lost. A `raindown` watching a folder above the vault, like `~/dev`, leaves it alone, so the two never both write to a note. Notes without directives, like `<!-- toc: -->`, or `raindown: true` in their front matter, don't start Raindown.
 
 ## Testing
 
