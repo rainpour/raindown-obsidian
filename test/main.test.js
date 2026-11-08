@@ -395,6 +395,24 @@ test('writes back a note with only bare directives when Bare syntax is on', asyn
   assert.equal(asked, 1);
 });
 
+test('gives a new server longer for its first answer than the ones after', async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown-slow');
+  fs.writeFileSync(file, `#!/usr/bin/env node
+console.log(JSON.stringify({ ready: true }));
+let first = true;
+process.stdin.on('data', (chunk) => {
+  const { id } = JSON.parse(chunk);
+  setTimeout(() => console.log(JSON.stringify({ id, output: '' })), first ? 300 : 0);
+  first = false;
+});
+`, { mode: 0o755 });
+  const server = new RaindownPlugin.RaindownServer(file);
+
+  assert.equal((await server.request({ path: 'note.md', markdown: '' }, { timeout: 100 })).output, '');
+  assert.equal((await server.request({ path: 'note.md', markdown: '' }, { timeout: 100 })).output, '');
+  server.stop();
+});
+
 test("says why Raindown's server stopped", async () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown-crash');
   fs.writeFileSync(file, `#!/usr/bin/env node

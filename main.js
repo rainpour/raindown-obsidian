@@ -18,6 +18,9 @@ const DELAY = 1000;
 const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
+// How long a new server has to start and give its first answer, as a new standalone binary unpacks itself first, and a
+// note in a big vault, or one in cloud storage, can take a while to list.
+const START_TIMEOUT = 60000;
 // The oldest Raindown that works with the plugin, as earlier ones read notes as ASCII when Obsidian's opened from the
 // Dock, and stop on the first accented letter.
 const MINIMUM_VERSION = '0.15.0';
@@ -168,13 +171,16 @@ class RaindownServer {
   async request(message, { timeout }) {
     if (!await this.start()) return null;
 
+    let wait = timeout;
+    if (!this.answered) wait = Math.max(timeout, START_TIMEOUT);
+
     return new Promise((resolve, reject) => {
       const id = this.nextId++;
       const timer = setTimeout(() => {
         this.pending.delete(id);
         this.stop(); // Stuck, so the next request starts it again.
-        reject(new Error(`Raindown didn't answer within ${timeout / 1000} seconds`));
-      }, timeout);
+        reject(new Error(`Raindown didn't answer within ${wait / 1000} seconds`));
+      }, wait);
       this.pending.set(id, { resolve, reject, timer });
       this.child.stdin.write(`${JSON.stringify({ id, ...message })}\n`);
     });
@@ -190,7 +196,7 @@ class RaindownServer {
         this.unsupported = true;
         ready(false);
       };
-      const timer = setTimeout(() => { unsupported(); child.kill(); }, TIMEOUT);
+      const timer = setTimeout(() => { unsupported(); child.kill(); }, START_TIMEOUT);
       let buffer = '';
       // What it last wrote to stderr, to say why it stopped. Read, too, so a full pipe can't stop it.
       let errors = '';
@@ -235,6 +241,7 @@ class RaindownServer {
 
     const request = this.pending.get(message.id);
     if (!request) return;
+    this.answered = true;
     this.pending.delete(message.id);
     clearTimeout(request.timer);
     if (message.error) request.reject(new Error(message.error));
