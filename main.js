@@ -444,9 +444,10 @@ function tableLines(markdown) {
   return [...markdown.matchAll(/^[ \t]*\|.*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
 }
 
-// The line an error is on, from Raindown's messages like "<!-- toc: --> on line 7 needs <!-- :toc -->", or null.
+// The line an error is on, from Raindown's messages like "<!-- toc: --> on line 7 needs <!-- :toc -->", or warnings
+// like "line 7: toc: takes no value", or null.
 function errorLine(message) {
-  const line = /\bon line (\d+)\b/.exec(message ?? '')?.[1];
+  const line = /\b(?:on )?line (\d+)\b/.exec(message ?? '')?.[1];
 
   return line ? Number(line) : null;
 }
@@ -755,7 +756,7 @@ class RaindownPlugin extends Plugin {
       if (markdown !== original) await this.applyToNote(file, original, markdown);
 
       this.written.set(file.path, markdown);
-      this.showError(file, null);
+      this.showError(file, errorLine(warnings)); // A directive that couldn't run, like toc: extra, says its line.
       this.report(this.shortMessage(warnings, file), { notify, done: markdown === original ? 'Nothing to write back' : 'Written back' });
       return markdown !== original;
     } catch (error) {

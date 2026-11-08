@@ -528,6 +528,16 @@ test("writes back on Enter on a held directive's line, and leaves Enter alone el
   assert.equal(raindown.confirmHeld({ file, editor }), false);
 });
 
+test("underlines the line of a directive Raindown couldn't run, while writing back the rest", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown, file } = await plugin({ dir, content: "<!-- toc: extra -->\n<!-- :toc -->\n", command: 'raindown' });
+  raindown.raindown = async ({ markdown }) => ({ output: markdown, warnings: "line 1: toc: takes no value, so it can't read \"extra\"" });
+
+  await raindown.writeBack(file, { force: true });
+
+  assert.equal(raindown.errors.get('note.md'), 1);
+});
+
 test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 
