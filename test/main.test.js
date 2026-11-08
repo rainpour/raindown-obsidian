@@ -478,6 +478,13 @@ test("shows Raindown's messages without the note's path, and others' from the va
   assert.equal(raindown.shortMessage('', file), '');
 });
 
+test("finds each directive's line from its name, to leave out of spell checking", () => {
+  const note = "Some prose\n<!-- table: data/my books.csv, total: true -->\n- written below\n:toc";
+  const lines = RaindownPlugin.directiveLines(note, RaindownPlugin.directiveTokens(note, { bare: true }));
+
+  assert.deepEqual(lines.map(({ from, to }) => note.slice(from, to)), ['table: data/my books.csv, total: true -->', ':toc']);
+});
+
 test("knows when the cursor's on a directive's line", () => {
   const note = "# A\n<!-- table: 'a.csv' -->\ntable: b.csv\n```\n<!-- toc: -->\n```\nSummary: text";
   const on = (line, options = {}) => RaindownPlugin.onDirectiveLine(note, { line, ch: 0 }, options);

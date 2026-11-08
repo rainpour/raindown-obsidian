@@ -380,6 +380,17 @@ function onDirectiveLine(text, { line }, options) {
   return directiveTokens(text, options).some(({ from, type }) => ['name', 'self-closing'].includes(type) && from >= start && from <= end);
 }
 
+// From each directive's name to the end of its line, like toc: or table: data/books.csv, total: true, so the editor
+// doesn't spell check its names, props and paths, while the Markdown it writes below is checked like any other.
+function directiveLines(text, tokens) {
+  return tokens.filter(({ type }) => ['name', 'self-closing'].includes(type)).map(({ from }) => {
+    let to = text.indexOf('\n', from);
+    if (to === -1) to = text.length;
+
+    return { from, to };
+  });
+}
+
 // Each table: directive's file, like 'data/books.csv', with where its line ends, for a button to open it there.
 function tableFiles(text, options) {
   const tokens = directiveTokens(text, options);
@@ -483,6 +494,7 @@ function highlighting(plugin) {
     error: Decoration.line({ class: 'cm-raindown-error' }),
     table: Decoration.line({ class: 'cm-raindown-table' })
   };
+  const notSpellChecked = Decoration.mark({ attributes: { spellcheck: 'false' } });
   const errorFor = (view) => plugin.errors.get(view.state.field(editorInfoField, false)?.file?.path) ?? null;
   const decorate = (view) => {
     const builder = new RangeSetBuilder();
@@ -492,7 +504,9 @@ function highlighting(plugin) {
     const buttons = tableFiles(markdown, options).map(({ at, data }) => ({
       from: at, to: at, decoration: Decoration.widget({ widget: new OpenFileWidget(data), side: 1 })
     }));
-    const ranges = [...directiveTokens(markdown, options), ...tableLines(markdown), ...buttons];
+    const tokens = directiveTokens(markdown, options);
+    const unchecked = directiveLines(markdown, tokens).map((line) => ({ ...line, decoration: notSpellChecked }));
+    const ranges = [...tokens, ...tableLines(markdown), ...buttons, ...unchecked];
     if (line && line <= view.state.doc.lines) ranges.unshift({ from: view.state.doc.line(line).from, type: 'error' });
 
     for (const { from, to, type, decoration } of ranges.sort((a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1))) {
@@ -1059,5 +1073,5 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
-  RaindownServer, changeOutsideHistory, onDirectiveLine, runRaindown, shellRaindown, tableFiles
+  RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });
