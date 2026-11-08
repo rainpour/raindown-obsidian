@@ -37,6 +37,8 @@ list: tags: 'book'
 
 [`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
 
+Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app, like Numbers or Excel. Changes there come back into the note. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
+
 ````md
 table: 'data/books.csv'
 <!-- table 2 rows · f690ac -->
@@ -123,6 +125,7 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 | **Raindown: Run the endpoints in this note** | Runs the [endpoints](https://raindown.dev/docs/endpoint) without a response, like `-x` |
 | **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed                      |
 | **Raindown: Find Raindown**                  | Looks for Raindown again, once you've installed it                                     |
+| **Raindown: Open this table's file**         | Opens the file of the table at the cursor, in your spreadsheet app                     |
 
 > [!NOTE]
 > Unlike the [CLI](https://raindown.dev/docs/cli) endpoints in Obsidian never run on save, only via the command.
