@@ -156,10 +156,10 @@ test("shows Raindown's errors in the status bar, and in a notice from a command"
   const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command });
 
   await raindown.writeBack(file);
-  assert.equal(raindown.status.text, 'Raindown: raindown: note.md: Missing end tag');
+  assert.equal(raindown.status.text, 'Raindown: note.md: Missing end tag');
 
   await raindown.writeBack(file, { notify: true });
-  assert.equal(Notice.messages.at(-1), 'raindown: note.md: Missing end tag');
+  assert.equal(Notice.messages.at(-1), 'note.md: Missing end tag');
 
   raindown.settings.command = fakeRaindown(dir, "process.stderr.write('Unknown arguments: note.md --stdin --rewrite\\n'); process.exit(1);");
   await raindown.writeBack(file, { notify: true });
@@ -463,6 +463,16 @@ test("opens a table's file from the project, and says when it isn't there yet", 
 
   assert.deepEqual(opened, ['notes/data/books.csv']);
   assert.equal(await raindown.projectRoot({ parent: { path: 'elsewhere' } }), '');
+});
+
+test("shows Raindown's messages without the note's path, and others' from the vault", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'Google Drive-'));
+  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown' });
+  const note = path.join(dir, 'note.md');
+  const message = `raindown: ${note}: <!-- toc: --> on line 3 needs <!-- :toc -->\nraindown: ${path.join(dir, 'notes', 'Bad.md')}: bad YAML`;
+
+  assert.equal(raindown.shortMessage(message, file), '<!-- toc: --> on line 3 needs <!-- :toc -->\nnotes/Bad.md: bad YAML');
+  assert.equal(raindown.shortMessage('', file), '');
 });
 
 test('finds the start of each line of a table, and no others', () => {

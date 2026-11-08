@@ -694,11 +694,11 @@ class RaindownPlugin extends Plugin {
 
       this.written.set(file.path, markdown);
       this.showError(file, null);
-      this.report(warnings, { notify, done: markdown === original ? 'Nothing to write back' : 'Written back' });
+      this.report(this.shortMessage(warnings, file), { notify, done: markdown === original ? 'Nothing to write back' : 'Written back' });
       return markdown !== original;
     } catch (error) {
       this.showError(file, errorLine(error.message));
-      this.report(error.message, { notify });
+      this.report(this.shortMessage(error.message, file), { notify });
       if (error.code === 'ENOENT') await this.findRaindown(file, { notify });
       return false;
     }
@@ -863,6 +863,16 @@ class RaindownPlugin extends Plugin {
     if (adapter instanceof FileSystemAdapter) return path.join(adapter.getBasePath(), file.path);
 
     return file.path;
+  }
+
+  // Raindown's message, which names files by their full path, like in a terminal, without the note's own, as it's the
+  // one it's about, others' from the vault, which in cloud storage is long, or Raindown's name, as the status has it.
+  shortMessage(message, file) {
+    const adapter = this.app.vault.adapter;
+    let short = message.replace(/^raindown: /gm, '').replaceAll(`${this.absolutePath(file)}: `, '');
+    if (adapter instanceof FileSystemAdapter) short = short.replaceAll(path.join(adapter.getBasePath(), path.sep), '');
+
+    return short;
   }
 
   report(message, { notify, done }) {
