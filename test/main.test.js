@@ -66,21 +66,29 @@ process.stdin.on('data', (chunk) => { input += chunk; });
 process.stdin.on('end', () => process.stdout.write(input.replace('<!-- :toc -->', '- [A](#a)\\n<!-- :toc -->')));`;
 
 // An open note's editor, which Obsidian saves to the vault on its own.
+// A stand-in for Obsidian's editor, with positions as { line, ch } like its own, and changes that span lines, made
+// against the text as it was before any of them, like a CodeMirror transaction's.
 function fakeEditor(text) {
   return {
     text,
     getValue() { return this.text; },
-    offsetToPos(offset) { return offset; },
+    getLine(line) { return this.text.split('\n')[line]; },
+    offsetToPos(offset) {
+      const before = this.text.slice(0, offset).split('\n');
+      return { line: before.length - 1, ch: before.at(-1).length };
+    },
+    posToOffset({ line, ch }) {
+      return this.text.split('\n').slice(0, line).reduce((offset, text) => offset + text.length + 1, 0) + ch;
+    },
     cursor: { line: 0, ch: 0 },
     getCursor() { return this.cursor; },
     setSelection(_anchor, head) { this.cursor = head; },
-    replaceRange(replacement, from, to) { this.text = this.text.slice(0, from) + replacement + this.text.slice(to); },
+    replaceRange(replacement, from, to = from) { this.transaction({ changes: [{ from, to, text: replacement }] }); },
     transaction({ changes }) {
-      const lines = this.text.split('\n');
-      for (const { from, to, text: replacement } of changes) {
-        lines[from.line] = lines[from.line].slice(0, from.ch) + replacement + lines[from.line].slice(to.ch);
+      const offsets = changes.map(({ from, to = from, text: replacement }) => [this.posToOffset(from), this.posToOffset(to), replacement]);
+      for (const [from, to, replacement] of offsets.sort(([a], [b]) => b - a)) {
+        this.text = this.text.slice(0, from) + replacement + this.text.slice(to);
       }
-      this.text = lines.join('\n');
     }
   };
 }
