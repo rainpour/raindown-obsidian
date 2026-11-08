@@ -288,6 +288,20 @@ async function firstRunning(commands) {
   return null;
 }
 
+// Changes the editor without adding to its undo history, so undo goes back through what was typed. Otherwise it undoes
+// what Raindown wrote, like a table of contents, which is written straight back. Obsidian's editor can't say so, so
+// it's dispatched to its CodeMirror view, or else made through Obsidian's editor, like in tests.
+function changeOutsideHistory(editor, changes) {
+  const view = editor.cm;
+  if (!view) return editor.transaction({ changes });
+
+  const { Transaction } = require('@codemirror/state');
+  view.dispatch({
+    changes: changes.map(({ from, to = from, text }) => ({ from: editor.posToOffset(from), to: editor.posToOffset(to), insert: text })),
+    annotations: Transaction.addToHistory.of(false)
+  });
+}
+
 // Highlighting, like the VS Code extension's: directives in comments, like <!-- toc: --> and the end tag <!-- :toc -->,
 // in <{ }>, and bare ones where they'd write back, like toc:, with the self-closing :toc. Not in code or front matter.
 const NAME = String.raw`[A-Za-z][\w-]*(?:::[A-Z]\w*)*`;
@@ -701,18 +715,18 @@ class RaindownPlugin extends Plugin {
     const current = editor.getValue();
     if (current !== original) {
       const comments = tableCommentChanges(current, markdown);
-      if (comments.length) editor.transaction({ changes: comments });
+      if (comments.length) changeOutsideHistory(editor, comments);
       return;
     }
 
     const changes = changedLines(original, markdown);
     if (!changes) {
       const { from, to, text } = changedRange(original, markdown);
-      return editor.replaceRange(text, editor.offsetToPos(from), editor.offsetToPos(to));
+      return changeOutsideHistory(editor, [{ from: editor.offsetToPos(from), to: editor.offsetToPos(to), text }]);
     }
 
     const [anchor, head] = [editor.getCursor('anchor'), editor.getCursor('head')];
-    editor.transaction({ changes });
+    changeOutsideHistory(editor, changes);
     editor.setSelection(movedCursor(anchor, original, markdown), movedCursor(head, original, markdown));
   }
 
@@ -860,5 +874,5 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
-  RaindownServer, runRaindown, shellRaindown
+  RaindownServer, changeOutsideHistory, runRaindown, shellRaindown
 });

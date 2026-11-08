@@ -424,6 +424,21 @@ process.stdin.on('data', () => { process.stderr.write('raindown: server: boom\\n
   await assert.rejects(server.request({ path: 'note.md', markdown: '' }, { timeout: 5000 }), /^Error: Raindown stopped: raindown: server: boom$/);
 });
 
+test("keeps what it writes back out of the editor's undo history", () => {
+  const dispatched = [];
+  const editor = {
+    cm: { dispatch: (transaction) => dispatched.push(transaction) },
+    posToOffset: ({ line, ch }) => (line * 10) + ch
+  };
+
+  RaindownPlugin.changeOutsideHistory(editor, [{ from: { line: 1, ch: 0 }, to: { line: 1, ch: 3 }, text: 'B' }, { from: { line: 2, ch: 1 }, text: 'C' }]);
+
+  assert.deepEqual(dispatched, [{
+    changes: [{ from: 10, to: 13, insert: 'B' }, { from: 21, to: 21, insert: 'C' }],
+    annotations: { addToHistory: false }
+  }]);
+});
+
 test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 

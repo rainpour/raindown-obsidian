@@ -4,5 +4,6 @@
 module.exports = {
   Decoration: { mark: (spec) => spec, line: (spec) => spec },
   ViewPlugin: { fromClass: (cls, spec) => ({ cls, spec }) },
-  RangeSetBuilder: class {}
+  RangeSetBuilder: class {},
+  Transaction: { addToHistory: { of: (value) => ({ addToHistory: value }) } }
 };
