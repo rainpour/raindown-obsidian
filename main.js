@@ -35,8 +35,9 @@ const DIRECTIVE = /<!--\s*[A-Za-z][\w:]*:|^raindown:\s*true\s*$/m;
 // With bare directives in every note, a line starting with a name and a colon, like toc:, might be one too.
 const BARE_DIRECTIVE = /^ {0,3}[A-Za-z]\w*:(?:\s|$)/m;
 
-function hasDirectives(markdown, { bare = false } = {}) {
-  return DIRECTIVE.test(markdown) || (bare && BARE_DIRECTIVE.test(markdown));
+// Takes the plugin's settings, so Bare syntax counts.
+function hasDirectives(markdown, { bareSyntax = false } = {}) {
+  return DIRECTIVE.test(markdown) || (bareSyntax && BARE_DIRECTIVE.test(markdown));
 }
 
 // "raindown NOTE --stdin --rewrite" prints the Markdown it's given as it would write it back to NOTE, without writing
@@ -178,6 +179,9 @@ class RaindownServer {
       };
       const timer = setTimeout(() => { unsupported(); child.kill(); }, TIMEOUT);
       let buffer = '';
+      // What it last wrote to stderr, to say why it stopped. Read, too, so a full pipe can't stop it.
+      let errors = '';
+      child.stderr.setEncoding('utf8').on('data', (chunk) => { errors = (errors + chunk).slice(-4000); });
 
       child.stdout.setEncoding('utf8').on('data', (chunk) => {
         buffer += chunk;
@@ -191,7 +195,9 @@ class RaindownServer {
       child.on('exit', () => {
         clearTimeout(timer);
         if (this.child === child) Object.assign(this, { child: null, starting: null });
-        this.pending.forEach(({ reject, timer: waiting }) => { clearTimeout(waiting); reject(new Error('Raindown stopped')); });
+        const why = errors.trim().split('\n').at(-1);
+        const stopped = why ? `Raindown stopped: ${why}` : 'Raindown stopped';
+        this.pending.forEach(({ reject, timer: waiting }) => { clearTimeout(waiting); reject(new Error(stopped)); });
         this.pending.clear();
         if (!this.ready) unsupported(); // Stopping before it was ready means it can't serve.
       });

@@ -118,7 +118,7 @@ test('only starts Raindown for notes with directives', () => {
   assert.ok(RaindownPlugin.hasDirectives('---\nraindown: true\n---\n'));
   assert.ok(!RaindownPlugin.hasDirectives('# A\n\n<!-- a note -->\nJust text.\n'));
   assert.ok(!RaindownPlugin.hasDirectives('# A\n\ntoc:\n'));
-  assert.ok(RaindownPlugin.hasDirectives('# A\n\ntoc:\n', { bare: true }));
+  assert.ok(RaindownPlugin.hasDirectives('# A\n\ntoc:\n', { bareSyntax: true }));
 });
 
 test('passes the note to Raindown to rewrite, and -x to run its endpoints', () => {
@@ -356,6 +356,30 @@ test("doesn't write back lists after it's unloaded", async () => {
   await new Promise((resolve) => { setTimeout(resolve, 1100); });
 
   assert.equal(writtenBack, false);
+});
+
+test('writes back a note with only bare directives when Bare syntax is on', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown, file } = await plugin({ dir, content: '# A\n\ntoc:\n', command: 'raindown' });
+  let asked = 0;
+  raindown.raindown = async ({ markdown }) => { asked += 1; return { output: markdown, warnings: '' }; };
+
+  await raindown.writeBack(file, { force: true });
+  raindown.settings.bareSyntax = true;
+  await raindown.writeBack(file, { force: true });
+
+  assert.equal(asked, 1);
+});
+
+test("says why Raindown's server stopped", async () => {
+  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown-crash');
+  fs.writeFileSync(file, `#!/usr/bin/env node
+console.log(JSON.stringify({ ready: true }));
+process.stdin.on('data', () => { process.stderr.write('raindown: server: boom\\n'); process.exit(1); });
+`, { mode: 0o755 });
+  const server = new RaindownPlugin.RaindownServer(file);
+
+  await assert.rejects(server.request({ path: 'note.md', markdown: '' }, { timeout: 5000 }), /^Error: Raindown stopped: raindown: server: boom$/);
 });
 
 test('finds the start of each line of a table, and no others', () => {
