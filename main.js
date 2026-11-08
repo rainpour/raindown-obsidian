@@ -354,6 +354,22 @@ function lineTokens(line, { bare }) {
   return tokens;
 }
 
+// Each table: directive's file, like 'data/books.csv', with where its line ends, for a button to open it there.
+function tableFiles(text, options) {
+  const tokens = directiveTokens(text, options);
+
+  return tokens.flatMap((token, index) => {
+    if (!/^:?table:?$/.test(text.slice(token.from, token.to))) return [];
+
+    let lineEnd = text.indexOf('\n', token.to);
+    if (lineEnd === -1) lineEnd = text.length;
+    const file = tokens.slice(index + 1).find((next) => next.type === 'string' && next.from < lineEnd);
+    if (!file) return [];
+
+    return [{ at: lineEnd, data: text.slice(file.from + 1, file.to - 1) }];
+  });
+}
+
 // In <{ }>, its first word is the directive, like toc: or :toc, and words are variables. Outside, words are text.
 function argumentTokens(text, offset, { antlers }, add) {
   let first = antlers;
@@ -405,8 +421,27 @@ function errorLine(message) {
 // The editor extension, from the CodeMirror Obsidian has, highlighting a note again as it changes, and underlining
 // the line of its error, if it has one, and setting its tables in a monospace font.
 function highlighting(plugin) {
-  const { Decoration, ViewPlugin } = require('@codemirror/view');
+  const { Decoration, ViewPlugin, WidgetType } = require('@codemirror/view');
   const { RangeSetBuilder } = require('@codemirror/state');
+  // A button after a table: directive, opening its file.
+  class OpenFileWidget extends WidgetType {
+    constructor(data) {
+      super();
+      this.data = data;
+    }
+
+    eq(other) {
+      return other.data === this.data;
+    }
+
+    toDOM(view) {
+      const button = document.createElement('button');
+      button.className = 'cm-raindown-open-file';
+      button.textContent = `Open ${path.extname(this.data).slice(1).toUpperCase()}`;
+      button.addEventListener('click', () => plugin.openTableFile(view.state.field(editorInfoField, false)?.file, this.data));
+      return button;
+    }
+  }
   const marks = {
     error: Decoration.line({ class: 'cm-raindown-error' }),
     table: Decoration.line({ class: 'cm-raindown-table' })
@@ -416,11 +451,15 @@ function highlighting(plugin) {
     const builder = new RangeSetBuilder();
     const line = errorFor(view);
     const markdown = view.state.doc.toString();
-    const ranges = [...directiveTokens(markdown, { bare: plugin.settings.bareSyntax }), ...tableLines(markdown)];
+    const options = { bare: plugin.settings.bareSyntax };
+    const buttons = tableFiles(markdown, options).map(({ at, data }) => ({
+      from: at, to: at, decoration: Decoration.widget({ widget: new OpenFileWidget(data), side: 1 })
+    }));
+    const ranges = [...directiveTokens(markdown, options), ...tableLines(markdown), ...buttons];
     if (line && line <= view.state.doc.lines) ranges.unshift({ from: view.state.doc.line(line).from, type: 'error' });
 
-    for (const { from, to, type } of ranges.sort((a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1))) {
-      builder.add(from, to ?? from, marks[type] ??= Decoration.mark({ class: `cm-raindown-${type}` }));
+    for (const { from, to, type, decoration } of ranges.sort((a, b) => a.from - b.from || (a.to ?? -1) - (b.to ?? -1))) {
+      builder.add(from, to ?? from, decoration ?? (marks[type] ??= Decoration.mark({ class: `cm-raindown-${type}` })));
     }
     return { decorations: builder.finish(), line };
   };
@@ -514,6 +553,15 @@ class RaindownPlugin extends Plugin {
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
     });
     this.addCommand({ id: 'find', name: 'Find Raindown', callback: () => this.findInstalledRaindown() });
+    this.addCommand({
+      id: 'open-table-file',
+      name: "Open this table's file",
+      editorCheckCallback: (checking, editor, view) => {
+        const table = this.tableAtCursor(editor);
+        if (table && !checking) this.openTableFile(view.file, table.data);
+        return Boolean(table);
+      }
+    });
     this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
       if (info.file) this.scheduleWriteBack(info.file, typingDelay(editor));
     }));
@@ -653,15 +701,38 @@ class RaindownPlugin extends Plugin {
 
   // A project's own nodes, from the .raindown folder in the note's folder or the nearest one above it.
   async projectNodes(file) {
-    const adapter = this.app.vault.adapter;
+    const nodes = path.posix.join(await this.projectRoot(file), '.raindown');
+    if (!await this.app.vault.adapter.exists(nodes)) return [];
+
+    const { files } = await this.app.vault.adapter.list(nodes);
+    return files.map((file) => /\/([A-Z]\w*)\.(?:rb|js|mjs|md|rd)$/.exec(file)?.[1]).filter(Boolean);
+  }
+
+  // The folder Raindown reads a note's files from, like a table's: the nearest with a .raindown folder, or the vault.
+  async projectRoot(file) {
     for (let folder = file?.parent?.path ?? ''; ; folder = path.posix.dirname(folder)) {
-      const nodes = path.posix.join(folder === '/' ? '' : folder, '.raindown');
-      if (await adapter.exists(nodes)) {
-        const { files } = await adapter.list(nodes);
-        return files.map((file) => /\/([A-Z]\w*)\.(?:rb|js|mjs|md|rd)$/.exec(file)?.[1]).filter(Boolean);
-      }
-      if (folder === '' || folder === '/' || folder === '.') return [];
+      if (folder === '/' || folder === '.') folder = '';
+      if (await this.app.vault.adapter.exists(path.posix.join(folder, '.raindown'))) return folder;
+      if (folder === '') return '';
     }
+  }
+
+  // Opens a table's file in the app the computer opens it with, like Numbers or Excel, as Obsidian doesn't open CSV
+  // files. Editing it there changes the table in the note too.
+  async openTableFile(file, data) {
+    const found = path.posix.normalize(path.posix.join(await this.projectRoot(file), data));
+    if (found.startsWith('..')) return new Notice(`${data} isn't in the vault`);
+    if (!await this.app.vault.adapter.exists(found)) return new Notice(`${data} is made when the note's written back`);
+    if (this.app.openWithDefaultApp) return this.app.openWithDefaultApp(found);
+
+    return require('electron').shell.openPath(path.join(this.app.vault.adapter.getBasePath(), found));
+  }
+
+  // The table: directive at the cursor, or the nearest above it.
+  tableAtCursor(editor) {
+    const { line } = editor.getCursor();
+    const cursorLineEnd = editor.posToOffset({ line, ch: editor.getLine(line).length });
+    return tableFiles(editor.getValue(), { bare: this.settings.bareSyntax }).filter(({ at }) => at <= cursorLineEnd).at(-1);
   }
 
   // Reading view shows a section with <{ }> in it, like <{ :toc }>, as Raindown renders it, which only Raindown can.
@@ -860,5 +931,5 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
-  RaindownServer, runRaindown, shellRaindown
+  RaindownServer, runRaindown, shellRaindown, tableFiles
 });

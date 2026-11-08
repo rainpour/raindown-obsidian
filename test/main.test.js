@@ -424,6 +424,32 @@ process.stdin.on('data', () => { process.stderr.write('raindown: server: boom\\n
   await assert.rejects(server.request({ path: 'note.md', markdown: '' }, { timeout: 5000 }), /^Error: Raindown stopped: raindown: server: boom$/);
 });
 
+test("finds each table's file, where its line ends, and not in code or another directive", () => {
+  const note = "<!-- table: 'a.csv' -->\n<!-- :table -->\n\n```md\n<!-- table: 'code.csv' -->\n```\n\n<{ :table 'b.tsv' total: true }>\n<!-- list: folder: 'notes' -->\ntable: 'bare.csv'\n";
+  const files = RaindownPlugin.tableFiles(note, {});
+
+  assert.deepEqual(files.map(({ data }) => data), ['a.csv', 'b.tsv']);
+  assert.equal(note.slice(0, files[0].at), "<!-- table: 'a.csv' -->");
+  assert.deepEqual(RaindownPlugin.tableFiles(note, { bare: true }).map(({ data }) => data), ['a.csv', 'b.tsv', 'bare.csv']);
+});
+
+test("opens a table's file from the project, and says when it isn't there yet", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown } = await plugin({ dir, content: '', command: 'raindown' });
+  const existing = new Set(['notes/.raindown', 'notes/data/books.csv']);
+  raindown.app.vault.adapter.exists = async (found) => existing.has(found);
+  const opened = [];
+  raindown.app.openWithDefaultApp = (found) => opened.push(found);
+  const note = { parent: { path: 'notes/2026' } };
+
+  await raindown.openTableFile(note, 'data/books.csv');
+  await raindown.openTableFile(note, 'data/missing.csv');
+  await raindown.openTableFile({ parent: { path: 'elsewhere' } }, '../../outside.csv');
+
+  assert.deepEqual(opened, ['notes/data/books.csv']);
+  assert.equal(await raindown.projectRoot({ parent: { path: 'elsewhere' } }), '');
+});
+
 test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 
