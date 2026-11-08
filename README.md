@@ -8,12 +8,7 @@ A [Markdown-superset](https://raindown.dev/) with features tailored for Obsidian
 
 <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table.gif" />
 
-[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
-
-Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
-
-The quickest way to change a table is in the note, which always writes back to its file. In a spreadsheet app, save the file as CSV for the note to update: Excel saves it in place, but Numbers keeps your changes in a separate `.numbers` file unless you choose **File → Export To → CSV** and replace the original.
-
+[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell and it's written back to the file. Changing the file itself updates the table.
 ````md
 table: 'data/books.csv'
 <!-- table 2 rows · f690ac -->
@@ -95,7 +90,7 @@ Install [Raindown](https://community.obsidian.md/plugins/raindown) from Obsidian
 
 ### The program
 
-The plugin needs the `raindown` program, which it can't install for you. Paste one of these commands into a terminal and press Return. It takes about a minute, and running it again updates Raindown. Then select **Check again**, or run **Raindown: Find Raindown** from the command palette.
+The plugin needs the `raindown` executable, which it can't install for you. Paste one of these commands into a terminal and press Return. It takes about a minute, and running it again updates Raindown. Then select **Check again**, or run **Raindown: Find Raindown** from the command palette.
 
 **macOS and Linux:** open **Terminal**, which you can find on a Mac by pressing Cmd + Space and typing `Terminal`, or on Linux by pressing Ctrl + Alt + T or searching your apps for `Terminal`, then run:
 
@@ -138,14 +133,6 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 
 > [!NOTE]
 > Unlike the [CLI](https://raindown.dev/docs/cli) endpoints in Obsidian never run on save, only via the command.
-
-## Requirements
-
-The `raindown` executable, which you [install yourself](#the-raindown-program). The plugin never installs or updates it, as Obsidian's developer policies don't allow that.
-
-The first time the plugin can't find it, it looks in `~/.local/bin`, or `%LOCALAPPDATA%\Programs\raindown` on Windows, and on your shell's `PATH`, which Obsidian opened from the Dock doesn't have. If it's not there either, it shows the command to run, and **Check again** or **Raindown: Find Raindown** looks again once you have. You can also set the plugin's **Raindown command** to its full path.
-
-It's desktop only, as Obsidian on phones can't run Raindown.
 
 ## Files and network
 
