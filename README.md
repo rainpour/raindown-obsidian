@@ -1,6 +1,6 @@
 # Raindown for Obsidian
 
-A [Markdown-superset](https://raindown.dev/) with features tailored for Obsidian.
+A [Markdown superset](https://raindown.dev/) where data stays current and complete.
 
 ## Features
 
