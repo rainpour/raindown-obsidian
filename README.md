@@ -117,6 +117,9 @@ Both check the download against the release's checksums. You can read them first
 
 A bare directive, on its own line like `toc:`, only writes back in a note with `raindown: true` in its front matter, unless **Bare syntax** is on. Only names Raindown knows like `toc:`, `list:` and your project's nodes write anything, so a line like `Summary:` is left alone.
 
+> [!WARNING]
+> Make sure your files are version controlled or backed up before enabling bare syntax, otherwise existing content beneath text like `list:` could be overwritten.
+
 Adding, renaming or removing a note writes back the notes with lists, like `list:`, so they don't go stale.
 
 ## Commands

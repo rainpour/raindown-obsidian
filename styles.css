@@ -13,6 +13,8 @@
 .cm-raindown-error { text-decoration: underline wavy var(--text-error); text-underline-offset: 3px; }
 /* The button after a table: directive, opening its file. */
 .cm-raindown-open-file { margin-left: 0.5em; padding: 0 0.5em; height: auto; font-size: var(--font-ui-smaller); vertical-align: middle; }
+/* A setting's warning, a blank line below its description. */
+.raindown-setting-warning { margin-top: 1em; }
 /* The hint beside a directive whose write-back waits for the cursor to leave its line, or Enter. */
 .cm-raindown-hint { margin-left: 0.75em; padding: 0 0.4em; border-radius: var(--radius-s); background: var(--interactive-accent); color: var(--text-on-accent); font-family: var(--font-interface); font-size: var(--font-ui-smaller); }
 /* Raindown pads a table's columns to line up, which only shows in a monospace font. */

@@ -24,6 +24,9 @@ const START_TIMEOUT = 60000;
 // The oldest Raindown that works with the plugin, as earlier ones read notes as ASCII when Obsidian's opened from the
 // Dock, and stop on the first accented letter.
 const MINIMUM_VERSION = '0.15.0';
+// Shown below the Bare syntax setting, as a bare directive writes over the lines below it, up to the next blank line.
+const BARE_SYNTAX_WARNING = 'Make sure your files are version controlled or backed up before enabling bare syntax, ' +
+  'otherwise existing content beneath text like "list:" could be overwritten';
 const MAX_BUFFER = 32 * 1024 * 1024;
 const INSTALL_URL = 'https://raindown.dev/docs/obsidian#install';
 // Notes listing others, which a note being added, renamed or removed changes.
@@ -1035,11 +1038,16 @@ class RaindownSettingTab extends PluginSettingTab {
       }));
 
     this.addToggle('writeBack', 'Write-back', 'Write back to a note with directives as you type');
-    this.addToggle('bareSyntax', 'Bare syntax', 'Recognise bare directives on their own line like toc: (equivalent to CLI --bare)');
+    this.addToggle('bareSyntax', 'Bare syntax', 'Recognise bare directives like "toc:" (equivalent to CLI --bare)', BARE_SYNTAX_WARNING);
   }
 
-  addToggle(key, name, description) {
-    new Setting(this.containerEl).setName(name).setDesc(description)
+  // A warning, if it has one, goes below its description, after a blank line, in the theme's warning colour.
+  addToggle(key, name, description, warning) {
+    const text = createFragment((fragment) => {
+      fragment.appendText(description);
+      if (warning) fragment.createDiv({ cls: 'mod-warning raindown-setting-warning', text: warning });
+    });
+    new Setting(this.containerEl).setName(name).setDesc(text)
       .addToggle((toggle) => toggle.setValue(this.plugin.settings[key]).onChange(async (value) => {
         this.plugin.settings[key] = value;
         await this.plugin.saveData(this.plugin.settings);
