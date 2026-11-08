@@ -394,13 +394,13 @@ function tableFiles(text, options) {
 }
 
 // The value after a directive's name, like its file, quoted or not, as Raindown reads it, up to any props, like
-// data/books.csv in table: data/books.csv total: true, or null without one.
+// data/books.csv in table: data/books.csv total: true, or table: data/books.csv, total: true, or null without one.
 function directiveArgument(rest) {
   const text = rest.replace(/\s*(?:-->|\}>)\s*$/, '').trim();
   const quoted = /^(["'])(.*?)\1/.exec(text);
   if (quoted) return quoted[2];
 
-  return /^(.*?)(?=\s+\w+(?:=|:\s)|$)/.exec(text)[1] || null;
+  return /^(.*?)(?=(?:,[ \t]*|\s+)\w+(?:=|:\s)|,?\s*$)/.exec(text)[1] || null;
 }
 
 // In <{ }>, its first word is the directive, like toc: or :toc, and words are variables. Outside, words are text.
