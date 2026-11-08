@@ -478,6 +478,56 @@ test("shows Raindown's messages without the note's path, and others' from the va
   assert.equal(raindown.shortMessage('', file), '');
 });
 
+test("knows when the cursor's on a directive's line", () => {
+  const note = "# A\n<!-- table: 'a.csv' -->\ntable: b.csv\n```\n<!-- toc: -->\n```\nSummary: text";
+  const on = (line, options = {}) => RaindownPlugin.onDirectiveLine(note, { line, ch: 0 }, options);
+
+  assert.deepEqual([0, 1, 2, 4, 6].map((line) => on(line)), [false, true, false, false, false]);
+  assert.equal(on(2, { bare: true }), true);
+});
+
+test("waits to write back while the cursor's on a directive's line, then writes back once it leaves", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const editor = fakeEditor("# A\n<!-- table: 'rtest.csv' -->\n<!-- :table -->\n");
+  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown', editor });
+  const asked = [];
+  raindown.raindown = async ({ markdown }) => { asked.push(markdown); return { output: markdown, warnings: '' }; };
+  const written = [];
+  raindown.scheduleWriteBack = (note) => written.push(note.path);
+
+  editor.cursor = { line: 1, ch: 20 };
+  assert.equal(await raindown.writeBack(file), false);
+  raindown.cursorMoved({ file, editor });
+  assert.deepEqual([asked.length, written], [0, []]);
+
+  editor.cursor = { line: 2, ch: 0 };
+  raindown.cursorMoved({ file, editor });
+  raindown.cursorMoved({ file, editor });
+  assert.deepEqual(written, ['note.md']);
+
+  editor.cursor = { line: 1, ch: 20 };
+  await raindown.writeBack(file, { notify: true });
+  assert.equal(asked.length, 1);
+});
+
+test("writes back on Enter on a held directive's line, and leaves Enter alone elsewhere", async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const editor = fakeEditor("# A\n<!-- table: 'abc/test.csv' -->\n<!-- :table -->\n");
+  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown', editor });
+  const asked = [];
+  raindown.raindown = async ({ markdown }) => { asked.push(markdown); return { output: markdown, warnings: '' }; };
+
+  editor.cursor = { line: 1, ch: 20 };
+  assert.equal(raindown.confirmHeld({ file, editor }), false);
+  await raindown.writeBack(file);
+  assert.equal(raindown.confirmHeld({ file, editor }), true);
+  await new Promise((resolve) => { setImmediate(resolve); });
+
+  assert.equal(asked.length, 1);
+  assert.equal(raindown.held.has('note.md'), false);
+  assert.equal(raindown.confirmHeld({ file, editor }), false);
+});
+
 test('finds the start of each line of a table, and no others', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
 

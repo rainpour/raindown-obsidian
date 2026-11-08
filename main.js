@@ -368,6 +368,15 @@ function lineTokens(line, { bare }) {
   return tokens;
 }
 
+// Whether the cursor's on a line with a directive, like table: data/books.csv, whose arguments might be half typed.
+function onDirectiveLine(text, { line }, options) {
+  const lines = text.split('\n');
+  const start = lines.slice(0, line).join('\n').length + (line ? 1 : 0);
+  const end = start + (lines[line] ?? '').length;
+
+  return directiveTokens(text, options).some(({ from, type }) => ['name', 'self-closing'].includes(type) && from >= start && from <= end);
+}
+
 // Each table: directive's file, like 'data/books.csv', with where its line ends, for a button to open it there.
 function tableFiles(text, options) {
   const tokens = directiveTokens(text, options);
@@ -498,6 +507,44 @@ function highlighting(plugin) {
   }, { decorations: (instance) => instance.decorations });
 }
 
+// The editor extension for a held write-back: a hint at the end of the directive's line, Enter there to write back
+// without a new line, and writing back once the cursor's left the line.
+function heldWriteBacks(plugin) {
+  const { Decoration, ViewPlugin, WidgetType, keymap } = require('@codemirror/view');
+  const { Prec } = require('@codemirror/state');
+  class HintWidget extends WidgetType {
+    eq() {
+      return true;
+    }
+
+    toDOM() {
+      const hint = document.createElement('span');
+      hint.className = 'cm-raindown-hint';
+      hint.textContent = '↵ Enter to update';
+      return hint;
+    }
+  }
+  const hint = Decoration.widget({ widget: new HintWidget(), side: 1 });
+  const infoFor = (view) => view.state.field(editorInfoField, false);
+  const decorate = (view) => {
+    const info = infoFor(view);
+    if (!info?.file || !plugin.held.has(info.file.path)) return Decoration.none;
+
+    return Decoration.set([hint.range(view.state.doc.lineAt(view.state.selection.main.head).to)]);
+  };
+
+  return [
+    ViewPlugin.fromClass(class {
+      constructor(view) { this.decorations = decorate(view); }
+      update(update) {
+        if (update.selectionSet) plugin.cursorMoved(infoFor(update.view));
+        this.decorations = decorate(update.view);
+      }
+    }, { decorations: (instance) => instance.decorations }),
+    Prec.high(keymap.of([{ key: 'Enter', run: (view) => plugin.confirmHeld(infoFor(view)) }]))
+  ];
+}
+
 // The HTML Raindown rendered between a section's markers, from the whole note's.
 function sectionHtml(html) {
   const start = html.indexOf(SECTION_START);
@@ -558,6 +605,8 @@ class RaindownPlugin extends Plugin {
     this.writing = new Map();
     // What each note was last written back as, so the save that writing it back makes doesn't start Raindown again.
     this.written = new Map();
+    // Notes whose write-back waits for the cursor to leave a directive's line.
+    this.held = new Set();
     // Each section's HTML in reading view, by its note's path and Markdown.
     this.sections = new Map();
     this.status = this.addStatusBarItem();
@@ -593,6 +642,7 @@ class RaindownPlugin extends Plugin {
     // The line of each note's error, for the editor to underline.
     this.errors = new Map();
     this.registerEditorExtension(highlighting(this));
+    this.registerEditorExtension(heldWriteBacks(this));
     this.registerEditorSuggest(new DirectiveSuggest(this.app, this));
     this.registerMarkdownPostProcessor((el, context) => this.renderSection(el, context));
     // Obsidian adds every file as it loads, so lists are only written back for notes added after that.
@@ -653,7 +703,7 @@ class RaindownPlugin extends Plugin {
 
   // One write-back of a note at a time, as each needs the table comments the last one wrote. Asked again meanwhile, it
   // runs once more when it's done, with the note as it is by then.
-  async writeBackInTurn(file) {
+  async writeBackInTurn(file, options = {}) {
     if (this.writing.has(file.path)) {
       this.writing.set(file.path, true);
       return;
@@ -661,7 +711,7 @@ class RaindownPlugin extends Plugin {
 
     this.writing.set(file.path, false);
     try {
-      await this.writeBack(file);
+      await this.writeBack(file, options);
     } finally {
       const again = this.writing.get(file.path);
       this.writing.delete(file.path);
@@ -689,7 +739,9 @@ class RaindownPlugin extends Plugin {
   // Saving writes back quietly, showing errors in the status bar, as a directive that's half typed fails until it's
   // done. The commands say what happened. Forced, a note's written back even if it hasn't changed since. Returns
   // whether the note changed.
-  async writeBack(file, { execute = false, notify = false, force = false } = {}) {
+  async writeBack(file, { execute = false, notify = false, force = false, confirmed = false } = {}) {
+    if (!notify && !confirmed && this.holdWhileOnDirective(file)) return false;
+
     const original = this.editorFor(file)?.getValue() ?? await this.app.vault.read(file);
     const unchanged = !force && this.written.get(file.path) === original;
     if (!notify && (unchanged || !hasDirectives(original, this.settings))) return false;
@@ -712,6 +764,39 @@ class RaindownPlugin extends Plugin {
       if (error.code === 'ENOENT') await this.findRaindown(file, { notify });
       return false;
     }
+  }
+
+  // Whether to wait to write back while the cursor's on a directive's line, as what's typed there is often half done,
+  // like a path, and table: would make a file for each, like test.csv, rtest.csv and ratest.csv. The commands don't.
+  holdWhileOnDirective(file) {
+    const editor = this.editorFor(file);
+    if (!editor || !onDirectiveLine(editor.getValue(), editor.getCursor(), { bare: this.settings.bareSyntax })) return false;
+
+    if (!this.held.has(file.path)) {
+      this.held.add(file.path);
+      this.app.workspace.updateOptions(); // Shows the hint.
+    }
+    return true;
+  }
+
+  // Enter on a held directive's line writes back, rather than starting a new line, which would split the directive.
+  confirmHeld(info) {
+    if (!info?.file || !this.held.has(info.file.path)) return false;
+    if (!onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), { bare: this.settings.bareSyntax })) return false;
+
+    this.held.delete(info.file.path);
+    this.app.workspace.updateOptions(); // Hides the hint.
+    this.writeBackInTurn(info.file, { confirmed: true });
+    return true;
+  }
+
+  // Writes back a held note once its cursor has left the directive's line.
+  cursorMoved(info) {
+    if (!info?.file || !this.held.has(info.file.path)) return;
+    if (onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), { bare: this.settings.bareSyntax })) return;
+
+    this.held.delete(info.file.path);
+    this.scheduleWriteBack(info.file, 0);
   }
 
   // Underlines the line of a note's error, or none, by updating its editors.
@@ -965,5 +1050,5 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
-  RaindownServer, changeOutsideHistory, runRaindown, shellRaindown, tableFiles
+  RaindownServer, changeOutsideHistory, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });
