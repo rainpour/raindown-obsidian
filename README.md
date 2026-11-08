@@ -37,7 +37,9 @@ list: tags: 'book'
 
 [`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
 
-Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app, like Numbers or Excel. Changes there come back into the note. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
+Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
+
+The quickest way to change a table is in the note, which always writes back to its file. In a spreadsheet app, save the file as CSV for the note to update: Excel saves it in place, but Numbers keeps your changes in a separate `.numbers` file unless you choose **File → Export To → CSV** and replace the original.
 
 ````md
 table: 'data/books.csv'

@@ -377,11 +377,21 @@ function tableFiles(text, options) {
 
     let lineEnd = text.indexOf('\n', token.to);
     if (lineEnd === -1) lineEnd = text.length;
-    const file = tokens.slice(index + 1).find((next) => next.type === 'string' && next.from < lineEnd);
-    if (!file) return [];
+    const data = directiveArgument(text.slice(token.to, lineEnd));
+    if (!data) return [];
 
-    return [{ at: lineEnd, data: text.slice(file.from + 1, file.to - 1) }];
+    return [{ at: lineEnd, data }];
   });
+}
+
+// The value after a directive's name, like its file, quoted or not, as Raindown reads it, up to any props, like
+// data/books.csv in table: data/books.csv total: true, or null without one.
+function directiveArgument(rest) {
+  const text = rest.replace(/\s*(?:-->|\}>)\s*$/, '').trim();
+  const quoted = /^(["'])(.*?)\1/.exec(text);
+  if (quoted) return quoted[2];
+
+  return /^(.*?)(?=\s+\w+(?:=|:\s)|$)/.exec(text)[1] || null;
 }
 
 // In <{ }>, its first word is the directive, like toc: or :toc, and words are variables. Outside, words are text.

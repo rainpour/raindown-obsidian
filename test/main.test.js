@@ -446,6 +446,9 @@ test("finds each table's file, where its line ends, and not in code or another d
   assert.deepEqual(files.map(({ data }) => data), ['a.csv', 'b.tsv']);
   assert.equal(note.slice(0, files[0].at), "<!-- table: 'a.csv' -->");
   assert.deepEqual(RaindownPlugin.tableFiles(note, { bare: true }).map(({ data }) => data), ['a.csv', 'b.tsv', 'bare.csv']);
+
+  const unquoted = 'table: test.csv\n<!-- table: data/my books.csv total: true -->\n';
+  assert.deepEqual(RaindownPlugin.tableFiles(unquoted, { bare: true }).map(({ data }) => data), ['test.csv', 'data/my books.csv']);
 });
 
 test("opens a table's file from the project, and says when it isn't there yet", async () => {
