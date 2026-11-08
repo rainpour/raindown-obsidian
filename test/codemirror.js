@@ -7,6 +7,7 @@ module.exports = {
   WidgetType: class {},
   keymap: { of: (bindings) => bindings },
   Prec: { high: (extension) => extension },
+  EditorState: { transactionFilter: { of: (filter) => filter } },
   RangeSetBuilder: class {},
   Transaction: { addToHistory: { of: (value) => ({ addToHistory: value }) } }
 };

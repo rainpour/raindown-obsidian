@@ -458,6 +458,149 @@ function tableLines(markdown) {
   return [...markdown.matchAll(/^[ \t]*\|.*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
 }
 
+// Lining up tables as they're typed, the same as Raindown's TableFormatter, so its write-back finds them lined up.
+const DELIMITER_CELL = /^:?-+:?$/;
+const FENCE = /^\s*(```|~~~)/;
+// Ruby's strip, which leaves other spaces, like a no-break space, in the cell.
+const STRIP = /^[ \t\n\v\f\r\0]+|[ \t\n\v\f\r\0]+$/g;
+// East Asian wide and fullwidth letters, and emoji, take two columns, like unicode-display-width's with emoji: :all.
+const WIDE = new RegExp(String.raw`[\u1100-\u115F\u2E80-\u303E\u3041-\u33FF\u3400-\u4DBF\u4E00-\u9FFF\uA000-\uA4CF` +
+  String.raw`\uA960-\uA97F\uAC00-\uD7A3\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFF60\uFFE0-\uFFE6\u{20000}-\u{3FFFD}\uFE0F\u20E3]` +
+  String.raw`|\p{Emoji_Presentation}`, 'u');
+const ZERO_WIDTH = /^[\p{Mn}\p{Me}\p{Cf}]+$/u;
+const graphemes = new Intl.Segmenter();
+
+function displayWidth(text) {
+  let width = 0;
+  for (const { segment } of graphemes.segment(text)) {
+    if (WIDE.test(segment)) width += 2;
+    else if (!ZERO_WIDTH.test(segment)) width += 1;
+  }
+  return width;
+}
+
+// A row's cells, split on pipes that aren't escaped, without its outer pipes.
+function tableCells(line) {
+  let content = line.replace(STRIP, '');
+  if (content.startsWith('|')) content = content.slice(1);
+  if (content.endsWith('|') && !content.endsWith('\\|')) content = content.slice(0, -1);
+  if (!content) return [];
+
+  return content.split(/(?<!\\)\|/).map((cell) => cell.replace(STRIP, ''));
+}
+
+function isTableStart(lines, index) {
+  const [header, delimiter] = [lines[index], lines[index + 1]];
+  if (!header.includes('|') || delimiter === undefined) return false;
+
+  const cells = tableCells(delimiter);
+  if (!cells.length || cells.length !== tableCells(header).length) return false;
+
+  return cells.every((cell) => DELIMITER_CELL.test(cell));
+}
+
+function columnAlignment(cell) {
+  if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
+  if (cell.endsWith(':')) return 'right';
+  if (cell.startsWith(':')) return 'left';
+  return null;
+}
+
+function paddedCell(cell, width, alignment) {
+  const padding = width - displayWidth(cell);
+  if (alignment === 'center') return ' '.repeat(Math.floor(padding / 2)) + cell + ' '.repeat(Math.ceil(padding / 2));
+  if (alignment === 'right') return ' '.repeat(padding) + cell;
+  return cell + ' '.repeat(padding);
+}
+
+function delimiterCell(width, alignment) {
+  if (alignment === 'center') return `:${'-'.repeat(width - 2)}:`;
+  if (alignment === 'right') return `${'-'.repeat(width - 1)}:`;
+  if (alignment === 'left') return `:${'-'.repeat(width - 1)}`;
+  return '-'.repeat(width);
+}
+
+// A table's lines with each column padded to its widest cell, or as they were when a row has more cells than its
+// header.
+function alignedTable(table) {
+  const indent = table[0].match(/^[ \t\n\v\f\r]*/)[0];
+  const [header, delimiter, ...body] = table.map(tableCells);
+  if (body.some((row) => row.length > header.length)) return table;
+
+  const rows = [header, ...body.map((row) => [...row, ...Array(header.length - row.length).fill('')])];
+  const alignments = delimiter.map(columnAlignment);
+  const widths = header.map((_, column) => Math.max(3, ...rows.map((row) => displayWidth(row[column]))));
+  const line = (cells) => `${indent}| ${cells.join(' | ')} |`;
+  const padded = (row) => line(row.map((cell, column) => paddedCell(cell, widths[column], alignments[column])));
+
+  const delimiters = widths.map((width, column) => delimiterCell(width, alignments[column]));
+
+  return [padded(rows[0]), line(delimiters), ...rows.slice(1).map(padded)];
+}
+
+// The note with every table lined up, outside code. Like Raindown, one lined up at the very end gets a line break
+// after it.
+function alignTables(markdown) {
+  const lines = markdown.split('\n');
+  const output = [];
+  let inFence = false;
+  for (let index = 0; index < lines.length;) {
+    if (FENCE.test(lines[index])) inFence = !inFence;
+    if (inFence || !isTableStart(lines, index)) {
+      output.push(lines[index++]);
+      continue;
+    }
+
+    let end = index + 2;
+    while (end < lines.length && lines[end].includes('|') && lines[end].trim()) end++;
+    const table = lines.slice(index, end);
+    const aligned = alignedTable(table);
+    output.push(...aligned, ...(end === lines.length && aligned !== table ? [''] : []));
+    index = end;
+  }
+  return output.join('\n');
+}
+
+function offsetOf(text, { line, ch }) {
+  return text.split('\n').slice(0, line).reduce((offset, before) => offset + before.length + 1, ch);
+}
+
+function positionOf(text, offset) {
+  const lines = text.slice(0, offset).split('\n');
+  return { line: lines.length - 1, ch: lines.at(-1).length };
+}
+
+// The changes lining up the note's tables, as offsets in it, and where the selection goes after them, or null when
+// they're lined up already.
+function tableAlignmentChanges(text, { anchor, head }) {
+  const aligned = alignTables(text);
+  if (aligned === text) return null;
+
+  const offsets = ({ from, to, text: insert }) => ({ from: offsetOf(text, from), to: offsetOf(text, to), insert });
+  const { from, to, text: insert } = changedRange(text, aligned);
+  const lines = changedLines(text, aligned)?.map(offsets);
+  const moved = (offset) => offsetOf(aligned, movedCursor(positionOf(text, offset), text, aligned));
+
+  return { changes: lines ?? [{ from, to, insert }], selection: { anchor: moved(anchor), head: moved(head) } };
+}
+
+// The editor extension lining up a table in the same change as each key typed in it, so it's never out of line while
+// Raindown writes back, and undo takes back both at once. Not while a letter's still being composed, as with an IME.
+function tableAlignment(plugin) {
+  const { EditorState } = require('@codemirror/state');
+  return EditorState.transactionFilter.of((transaction) => {
+    const typed = transaction.isUserEvent('input') || transaction.isUserEvent('delete');
+    if (!typed || transaction.isUserEvent('input.type.compose')) return transaction;
+    if (!plugin.settings.writeBack || !transaction.docChanged) return transaction;
+
+    const { main } = transaction.newSelection;
+    if (!transaction.newDoc.lineAt(main.head).text.includes('|')) return transaction;
+
+    const alignment = tableAlignmentChanges(transaction.newDoc.toString(), main);
+    return alignment ? [transaction, { ...alignment, sequential: true }] : transaction;
+  });
+}
+
 // The line an error is on, from Raindown's messages like "<!-- toc: --> on line 7 needs <!-- :toc -->", or warnings
 // like "line 7: toc: takes no value", or null.
 function errorLine(message) {
@@ -661,6 +804,7 @@ class RaindownPlugin extends Plugin {
     this.errors = new Map();
     this.registerEditorExtension(highlighting(this));
     this.registerEditorExtension(heldWriteBacks(this));
+    this.registerEditorExtension(tableAlignment(this));
     this.registerEditorSuggest(new DirectiveSuggest(this.app, this));
     this.registerMarkdownPostProcessor((el, context) => this.renderSection(el, context));
     // Obsidian adds every file as it loads, so lists are only written back for notes added after that.
@@ -1071,7 +1215,8 @@ class RaindownSettingTab extends PluginSettingTab {
 
 module.exports = RaindownPlugin;
 Object.assign(module.exports, {
-  applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
-  DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
+  alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
+  DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
+  tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });

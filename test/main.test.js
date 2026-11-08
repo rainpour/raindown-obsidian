@@ -618,3 +618,68 @@ test('knows when the cursor is in a table cell starting with =', () => {
   assert.equal(RaindownPlugin.inFormulaCell(row, row.length - 2), false);
   assert.equal(RaindownPlugin.inFormulaCell('total =sum(c)', 12), false);
 });
+
+test('lines up tables like Raindown, keeping alignment markers, escaped pipes and indents, and leaving code alone', () => {
+  const { alignTables } = RaindownPlugin;
+
+  assert.equal(alignTables('| Command | Description |\n|-|-|\n| render | Render once |\n| watch | Re-render on save |\n'),
+    '| Command | Description       |\n| ------- | ----------------- |\n| render  | Render once       |\n| watch   | Re-render on save |\n');
+  assert.equal(alignTables('| Left | Center | Right | None |\n|:-|:-:|-:|-|\n| a | b | c | d |\n'),
+    '| Left | Center | Right | None |\n| :--- | :----: | ----: | ---- |\n| a    |   b    |     c | d    |\n');
+  assert.equal(alignTables('a | bb\n-|-\nccc | d\n'), '| a   | bb  |\n| --- | --- |\n| ccc | d   |\n');
+  assert.equal(alignTables('| a | b |\n|-|-|\n| x \\| y | z |\n'), '| a      | b   |\n| ------ | --- |\n| x \\| y | z   |\n');
+  assert.equal(alignTables('| a | b |\n|-|-|\n| c |\n'), '| a   | b   |\n| --- | --- |\n| c   |     |\n');
+  assert.equal(alignTables('- Item\n\n  | a | bb |\n  |-|-|\n  | c | d |\n'), '- Item\n\n  | a   | bb  |\n  | --- | --- |\n  | c   | d   |\n');
+  assert.equal(alignTables('| a |\n|-|\n| b |'), '| a   |\n| --- |\n| b   |\n');
+
+  for (const unchanged of ['| a | b |\n|-|-|\n| c | d | e |\n', '```\n| a | b |\n|-|-|\n| ccc | d |\n```\n', 'Use a | b in text.\n\n| not | a table |\n']) {
+    assert.equal(alignTables(unchanged), unchanged);
+  }
+});
+
+test('counts wide characters and emoji as two columns, and combining marks as none, like Raindown', () => {
+  const { alignTables } = RaindownPlugin;
+
+  assert.equal(alignTables('| a | b |\n|-|-|\n| 日本語 | 🎉 |\n| 👨‍👩‍👧 | 🇯🇵 |\n'),
+    '| a      | b   |\n| ------ | --- |\n| 日本語 | 🎉  |\n| 👨‍👩‍👧     | 🇯🇵  |\n');
+  assert.equal(alignTables('| a | b |\n|-|-|\n| cafés | ❤️ |\n| 한 | ❤ |\n'),
+    '| a     | b   |\n| ----- | --- |\n| cafés | ❤️  |\n| 한    | ❤   |\n');
+  assert.equal(alignTables('| left | center | right |\n|:-|:-:|-:|\n| 日 | 日 | 日 |\n'),
+    '| left | center | right |\n| :--- | :----: | ----: |\n| 日   |   日   |    日 |\n');
+});
+
+test('lines up a table as a key is typed in it, keeping the cursor after what was typed', () => {
+  const text = '| a   | b   |\n| --- | --- |\n| cccc | d   |\n';
+  const head = text.indexOf('cccc') + 4;
+  const { changes, selection } = RaindownPlugin.tableAlignmentChanges(text, { anchor: head, head });
+  const aligned = changes.reduce((note, { from, to, insert }) => note.slice(0, from) + insert + note.slice(to), text);
+
+  assert.equal(aligned, '| a    | b   |\n| ---- | --- |\n| cccc | d   |\n');
+  assert.deepEqual(selection, { anchor: aligned.indexOf('cccc') + 4, head: aligned.indexOf('cccc') + 4 });
+  assert.equal(RaindownPlugin.tableAlignmentChanges(aligned, { anchor: 0, head: 0 }), null);
+});
+
+test('lines up tables in the same change as what was typed, and not for other changes, or with write-back off', () => {
+  const text = '| a | b |\n|-|-|\n';
+  const transaction = (userEvent) => ({
+    docChanged: true,
+    isUserEvent: (event) => userEvent === event || userEvent.startsWith(`${event}.`),
+    newSelection: { main: { anchor: 3, head: 3 } },
+    newDoc: { toString: () => text, lineAt: () => ({ text: '| a | b |' }) }
+  });
+  const settings = { writeBack: true };
+  const tableAlignment = RaindownPlugin.tableAlignment({ settings });
+
+  const typed = transaction('input.type');
+  const [first, alignment] = tableAlignment(typed);
+  assert.equal(first, typed);
+  assert.equal(alignment.sequential, true);
+  assert.equal(alignment.changes.length, 2);
+
+  for (const userEvent of ['undo', 'input.type.compose']) {
+    const other = transaction(userEvent);
+    assert.equal(tableAlignment(other), other);
+  }
+  settings.writeBack = false;
+  assert.equal(tableAlignment(typed), typed);
+});
