@@ -4,6 +4,43 @@ A [Markdown-superset](https://raindown.dev/) with features tailored for Obsidian
 
 ## Features
 
+### Table
+
+<img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table.gif" />
+
+[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
+
+Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
+
+The quickest way to change a table is in the note, which always writes back to its file. In a spreadsheet app, save the file as CSV for the note to update: Excel saves it in place, but Numbers keeps your changes in a separate `.numbers` file unless you choose **File → Export To → CSV** and replace the original.
+
+````md
+table: 'data/books.csv'
+<!-- table 2 rows · f690ac -->
+| title    | rating |
+| -------- | ------ |
+| Dune     | 5      |
+| Hyperion | 4      |
+````
+
+### Table of contents
+
+<img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/toc.gif" />
+
+[`toc:`](https://raindown.dev/docs/toc) writes an inline TOC which updates as you add and rename headings.
+
+````md
+# Books
+
+toc:
+- [Reading](#reading)
+- [Finished](#finished)
+
+## Reading
+
+## Finished
+````
+
 ### Metadata
 
 Underscored values in file paths are automatically converted to metadata. For example, in the following file path...
@@ -33,23 +70,6 @@ list: tags: 'book'
 - [Hyperion](books/Hyperion.md)
 ````
 
-### Table
-
-[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell in the note and it's written back to the file, and changing the file updates the table.
-
-Obsidian doesn't open CSV files, so a table has an **Open CSV** button beside it, which opens its file in your spreadsheet app. The file's made the first time the note's written back, from the table you've typed below it, or else with a table to fill in.
-
-The quickest way to change a table is in the note, which always writes back to its file. In a spreadsheet app, save the file as CSV for the note to update: Excel saves it in place, but Numbers keeps your changes in a separate `.numbers` file unless you choose **File → Export To → CSV** and replace the original.
-
-````md
-table: 'data/books.csv'
-<!-- table 2 rows · f690ac -->
-| title    | rating |
-| -------- | ------ |
-| Dune     | 5      |
-| Hyperion | 4      |
-````
-
 ### Charts
 
 [`chart:`](https://raindown.dev/docs/chart) draws a CSV, TSV, JSON or YAML file in your vault.
@@ -61,22 +81,6 @@ Jan  ███████████████████████▊   
 Feb  ████████████████████████████████████████ 540
 Mar  ██████████████████████████████▍          410
 ```
-````
-
-### Table of contents
-
-[`toc:`](https://raindown.dev/docs/toc) writes an inline TOC which updates as you add and rename headings.
-
-````md
-# Books
-
-toc:
-- [Reading](#reading)
-- [Finished](#finished)
-
-## Reading
-
-## Finished
 ````
 
 ### Components
