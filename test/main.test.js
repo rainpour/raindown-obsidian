@@ -36,7 +36,7 @@ function fakeServer(dir) {
   const file = path.join(dir, 'raindown-server');
   fs.writeFileSync(file, `#!/usr/bin/env node
 const fs = require('fs');
-console.log(JSON.stringify({ ready: true, version: '0.11.0' }));
+console.log(JSON.stringify({ ready: true, version: '0.17.0' }));
 let buffer = '';
 process.stdin.on('data', (chunk) => {
   buffer += chunk;
@@ -237,6 +237,30 @@ test('changes an open note in its editor, with unsaved typing, only where it cha
 
   assert.deepEqual(RaindownPlugin.changedRange('abc', 'aXc'), { from: 1, to: 2, text: 'X' });
   assert.deepEqual(RaindownPlugin.changedRange('aa', 'aaa'), { from: 2, to: 2, text: 'a' });
+});
+
+test('compares versions', () => {
+  assert.ok(RaindownPlugin.isOlder('0.11.0', '0.15.0'));
+  assert.ok(RaindownPlugin.isOlder('0.9.9\n', '0.15.0'));
+  assert.ok(!RaindownPlugin.isOlder('0.15.0', '0.15.0'));
+  assert.ok(!RaindownPlugin.isOlder('1.0', '0.15.0'));
+  assert.ok(!RaindownPlugin.isOlder('0.17.0', '0.15.0'));
+});
+
+test('shows how to update an old Raindown, once until another is found', async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+  const { raindown } = await plugin({ dir, content: '', command: 'raindown' });
+  const opened = Modal.opened.length;
+
+  raindown.checkVersion('0.17.0');
+  raindown.checkVersion('0.11.0');
+  raindown.checkVersion('0.11.0');
+  assert.equal(Modal.opened.length - opened, 1);
+  assert.equal(Modal.opened.at(-1).wording().title, 'Update Raindown');
+
+  await raindown.useRaindown('raindown');
+  raindown.checkVersion('0.11.0');
+  assert.equal(Modal.opened.length - opened, 2);
 });
 
 test('offers the install command for the computer', () => {

@@ -18,6 +18,9 @@ const DELAY = 1000;
 const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
+// The oldest Raindown that works with the plugin, as earlier ones read notes as ASCII when Obsidian's opened from the
+// Dock, and stop on the first accented letter.
+const MINIMUM_VERSION = '0.15.0';
 const MAX_BUFFER = 32 * 1024 * 1024;
 const INSTALL_URL = 'https://raindown.dev/docs/obsidian#install';
 // Notes listing others, which a note being added, renamed or removed changes.
@@ -141,12 +144,22 @@ function runRaindown(command, args, input, { cwd, timeout }) {
   });
 }
 
+// Whether a version, like 0.11.0, is older than another, like 0.15.0.
+function isOlder(version, than) {
+  const [mine, theirs] = [version, than].map((text) => text.trim().replace(/^v/, '').split('.').map(Number));
+  const index = theirs.findIndex((part, i) => part !== (mine[i] || 0));
+
+  return index !== -1 && (mine[index] || 0) < theirs[index];
+}
+
 // "raindown server" keeps Raindown loaded, so writing back or rendering doesn't start Ruby again each time. It starts
 // when it's first asked something, and again after it stops. A Raindown without it, from before it, or one that doesn't
 // start, isn't asked again, and requests answer null, for running Raindown once each instead.
 class RaindownServer {
-  constructor(command) {
+  // onReady is given the version it says it is.
+  constructor(command, onReady = () => {}) {
     this.command = command;
+    this.onReady = onReady;
     this.pending = new Map();
     this.nextId = 1;
   }
@@ -216,6 +229,7 @@ class RaindownServer {
     }
     if (message.ready) {
       this.ready = true;
+      this.onReady(message.version);
       return ready();
     }
 
@@ -522,7 +536,7 @@ class RaindownPlugin extends Plugin {
   serverFor() {
     if (this.server?.command !== this.settings.command) {
       this.server?.stop();
-      this.server = new RaindownServer(this.settings.command);
+      this.server = new RaindownServer(this.settings.command, (version) => this.checkVersion(version));
     }
 
     return this.server;
@@ -534,6 +548,7 @@ class RaindownPlugin extends Plugin {
     const bare = this.settings.bareSyntax;
     const answer = await this.serverFor().request({ path: filePath, markdown, rewrite, execute, bare }, { timeout });
     if (answer) return { output: answer.output, warnings: (answer.warnings ?? []).join('\n') };
+    this.checkVersionOf(this.settings.command);
 
     const args = rewrite ? rewriteArgs(filePath, { execute, bare }) : [filePath, '--stdin', ...(bare ? ['--bare'] : [])];
     return runRaindown(this.settings.command, args, markdown, { cwd: path.dirname(filePath), timeout });
@@ -726,10 +741,27 @@ class RaindownPlugin extends Plugin {
     return Boolean(found);
   }
 
+  // An old Raindown, like one the plugin used to download, is shown how to update it, once until another's found.
+  checkVersion(version) {
+    if (this.warnedOld || !version || !isOlder(version, MINIMUM_VERSION)) return;
+
+    this.warnedOld = true;
+    new InstallModal(this.app, () => this.findInstalledRaindown(), { old: version.trim() }).open();
+  }
+
+  // A Raindown without a server says its version when asked, once for each command.
+  checkVersionOf(command) {
+    if (this.checkedCommand === command) return;
+
+    this.checkedCommand = command;
+    runRaindown(command, ['--version'], '', { timeout: TIMEOUT }).then(({ output }) => this.checkVersion(output), () => {});
+  }
+
   // A server that couldn't start before it was installed isn't asked again, so the next write-back starts a new one.
   async useRaindown(command) {
     this.server?.stop();
     this.server = null;
+    this.warnedOld = false;
     this.settings.command = command;
     await this.saveData(this.settings);
   }
@@ -747,17 +779,19 @@ class RaindownPlugin extends Plugin {
   }
 }
 
-// Shows how to install Raindown, and looks for it again once that's done.
+// Shows how to install Raindown, or update an old one, and looks for it again once that's done.
 class InstallModal extends Modal {
-  constructor(app, check) {
+  constructor(app, check, { old } = {}) {
     super(app);
     this.check = check;
+    this.old = old;
   }
 
   onOpen() {
-    this.titleEl.setText('Install Raindown');
-    this.contentEl.createEl('p', { text: "This plugin needs the raindown program, and Obsidian can't find one that runs." });
-    this.contentEl.createEl('p', { text: 'To install it, paste this into a terminal, then select Check again:' });
+    const { title, why, how } = this.wording();
+    this.titleEl.setText(title);
+    this.contentEl.createEl('p', { text: why });
+    this.contentEl.createEl('p', { text: `${how}, paste this into a terminal, then select Check again:` });
     this.contentEl.createEl('pre').createEl('code', { text: installCommand() });
     this.contentEl.createEl('a', { text: 'More ways to install Raindown', href: INSTALL_URL });
     new Setting(this.contentEl)
@@ -773,6 +807,14 @@ class InstallModal extends Modal {
 
   onClose() {
     this.contentEl.empty();
+  }
+
+  wording() {
+    if (!this.old) {
+      return { title: 'Install Raindown', why: "This plugin needs the raindown program, and Obsidian can't find one that runs.", how: 'To install it' };
+    }
+
+    return { title: 'Update Raindown', why: `This plugin needs Raindown ${MINIMUM_VERSION} or newer, and you have ${this.old}.`, how: 'To update it' };
   }
 }
 
@@ -810,6 +852,6 @@ class RaindownSettingTab extends PluginSettingTab {
 module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
-  DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
+  DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml, tableCommentChanges, tableLines,
   RaindownServer, runRaindown, shellRaindown
 });
