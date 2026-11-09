@@ -661,25 +661,31 @@ test('lines up a table as a key is typed in it, keeping the cursor after what wa
 
 test('lines up tables in the same change as what was typed, and not for other changes, or with write-back off', () => {
   const text = '| a | b |\n|-|-|\n';
-  const transaction = (userEvent) => ({
+  // A change deleting the before text's 'deleted', or else typing.
+  const transaction = (userEvent, deleted = 'x') => ({
     docChanged: true,
     isUserEvent: (event) => userEvent === event || userEvent.startsWith(`${event}.`),
     newSelection: { main: { anchor: 3, head: 3 } },
-    newDoc: { toString: () => text, lineAt: () => ({ text: '| a | b |' }) }
+    newDoc: { toString: () => text, lineAt: () => ({ text: '| a | b |' }) },
+    startState: { sliceDoc: () => deleted },
+    changes: { iterChanges: (each) => each(0, deleted.length, 0, 0, { length: userEvent.startsWith('delete') ? 0 : 1 }) }
   });
   const settings = { writeBack: true };
   const tableAlignment = RaindownPlugin.tableAlignment({ settings });
 
-  const typed = transaction('input.type');
-  const [first, alignment] = tableAlignment(typed);
-  assert.equal(first, typed);
-  assert.equal(alignment.sequential, true);
-  assert.equal(alignment.changes.length, 2);
+  for (const userEvent of ['input.type', 'delete.backward']) {
+    const typed = transaction(userEvent);
+    const [first, alignment] = tableAlignment(typed);
+    assert.equal(first, typed);
+    assert.equal(alignment.sequential, true);
+    assert.equal(alignment.changes.length, 2);
+  }
 
-  for (const userEvent of ['undo', 'input.type.compose']) {
-    const other = transaction(userEvent);
+  // Deleting a formula cell's padding shows its formula, so it's left for Raindown to see.
+  for (const other of [transaction('undo'), transaction('input.type.compose'), transaction('delete.backward', '  ')]) {
     assert.equal(tableAlignment(other), other);
   }
   settings.writeBack = false;
+  const typed = transaction('input.type');
   assert.equal(tableAlignment(typed), typed);
 });

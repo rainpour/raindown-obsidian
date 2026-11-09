@@ -585,12 +585,14 @@ function tableAlignmentChanges(text, { anchor, head }) {
 }
 
 // The editor extension lining up a table in the same change as each key typed in it, so it's never out of line while
-// Raindown writes back, and undo takes back both at once. Not while a letter's still being composed, as with an IME.
+// Raindown writes back, and undo takes back both at once. Not while a letter's still being composed, as with an IME,
+// or for spaces deleted, as deleting a formula cell's padding shows its formula, which Raindown can't tell if it's
+// padded again. Raindown lines it up as it writes back.
 function tableAlignment(plugin) {
   const { EditorState } = require('@codemirror/state');
   return EditorState.transactionFilter.of((transaction) => {
     const typed = transaction.isUserEvent('input') || transaction.isUserEvent('delete');
-    if (!typed || transaction.isUserEvent('input.type.compose')) return transaction;
+    if (!typed || transaction.isUserEvent('input.type.compose') || deletesOnlySpaces(transaction)) return transaction;
     if (!plugin.settings.writeBack || !transaction.docChanged) return transaction;
 
     const { main } = transaction.newSelection;
@@ -599,6 +601,14 @@ function tableAlignment(plugin) {
     const alignment = tableAlignmentChanges(transaction.newDoc.toString(), main);
     return alignment ? [transaction, { ...alignment, sequential: true }] : transaction;
   });
+}
+
+function deletesOnlySpaces(transaction) {
+  let spaces = transaction.isUserEvent('delete');
+  transaction.changes.iterChanges((fromA, toA, _fromB, _toB, inserted) => {
+    spaces &&= !inserted.length && /^[ \t]+$/.test(transaction.startState.sliceDoc(fromA, toA));
+  });
+  return spaces;
 }
 
 // The line an error is on, from Raindown's messages like "<!-- toc: --> on line 7 needs <!-- :toc -->", or warnings
