@@ -730,7 +730,7 @@ test('moves to the end of the same cell in the row below on Enter, like a spread
   const added = entered(note, note.indexOf('Done'));
   assert.equal(added.changed, `${note}|  |  |\n`);
   assert.equal(added.after, ' |');
-  assert.equal(RaindownPlugin.enteredCell(note, note.indexOf('---'), {}), null);
+  assert.equal(RaindownPlugin.enteredCell('Not a table\n', 2, {}), null);
 });
 
 test("collapses a table: block's expanded cell on Enter, joining its + rows back into its row", () => {
@@ -846,4 +846,16 @@ test('deletes the |+ lines in the same change as deleting their row, and leaves 
   assert.deepEqual(RaindownPlugin.rowDeletions()(deleted), [deleted, { changes: [{ from: note.indexOf('|+made'), to: note.length }] }]);
   const typed = transaction('input.type');
   assert.equal(RaindownPlugin.rowDeletions()(typed), typed);
+});
+
+test('moves down from the delimiter row on Enter and Tab, like from any row, rather than splitting the table', () => {
+  const note = '| task | notes |\n| ---- | ===== |\n| Milk | Tag |\n';
+  const at = note.indexOf('=====') + 2;
+
+  assert.equal(entered(note, at).after, ' |');
+  assert.equal(note.slice(0, RaindownPlugin.enteredCell(note, at, {}).cursor).split('\n').at(-1), '| Milk | Tag');
+  assert.equal(entered('| task | notes |\n| ---- | ===== |\n', at).changed, '| task | notes |\n| ---- | ===== |\n|  |  |\n');
+  assert.equal(note.slice(0, RaindownPlugin.tabbedCell(note, note.indexOf('----'))).split('\n').at(-1), '| ---- | =====');
+  assert.equal(RaindownPlugin.carriedOnCell(note, at), null);
+  assert.equal(RaindownPlugin.inFixedCell(`table: 'tasks.csv'\n${note}`, { line: 2, ch: 10 }, { bare: true }), false);
 });

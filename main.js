@@ -547,7 +547,8 @@ function tabbedCell(text, offset, { back = false } = {}) {
 
 // The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a |+ row below the
 // cursor's row carrying the cell on, with what's after the cursor in it, rather than splitting the row, which would
-// end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header or delimiter row.
+// end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header or
+// delimiter row.
 function carriedOnCell(text, offset) {
   const lines = text.split('\n');
   const { line, ch } = positionOf(text, offset);
