@@ -554,9 +554,9 @@ test("underlines the line of a directive Raindown couldn't run, while writing ba
 });
 
 test('finds the start of each line of a table, and no others', () => {
-  const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n\nnot | a table |\n';
+  const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n+ | 3 |\n\nnot | a table |\n';
 
-  assert.deepEqual(RaindownPlugin.tableLines(text).map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |']);
+  assert.deepEqual(RaindownPlugin.tableLines(text).map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |', '+ | 3 |']);
 });
 
 test('changes each changed line on its own, last first, so a table lined up again keeps the cursor out of them', () => {
@@ -688,4 +688,54 @@ test('lines up tables in the same change as what was typed, and not for other ch
   settings.writeBack = false;
   const typed = transaction('input.type');
   assert.equal(tableAlignment(typed), typed);
+});
+
+test('keeps a column with equals signs as wide as they are, and lines up + rows, keeping their +', () => {
+  assert.equal(RaindownPlugin.alignTables('| name | notes |\n|-|:======|\n| Ada | Tag the |\n+ | build |\n| Lin | far too long |\n'),
+    '| name | notes   |\n| ---- | :====== |\n| Ada  | Tag the |\n+      | build   |\n| Lin  | far too long |\n');
+});
+
+test('carries a cell on onto a + row on Option or Alt and Enter, with what is after the cursor, but not in the header', () => {
+  const note = '| task | notes |\n| --- | ===== |\n| Release | Tag the build |\n';
+  const at = note.indexOf('the build') + 3;
+  const change = RaindownPlugin.carriedOnCell(note, at);
+  const changed = note.slice(0, change.from) + change.insert + note.slice(change.to);
+
+  assert.equal(changed, '| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+  | build |\n');
+  assert.equal(changed.slice(change.cursor), 'build |\n');
+  assert.notEqual(RaindownPlugin.carriedOnCell(note, note.indexOf('Release') + 2), null);
+  assert.equal(RaindownPlugin.carriedOnCell(note, note.indexOf('notes')), null);
+});
+
+// What Enter makes of the note, and the text after the cursor on its line.
+function entered(note, at, options = { bare: true }) {
+  const change = RaindownPlugin.enteredCell(note, at, options);
+  const changed = note.slice(0, change.from) + change.insert + note.slice(change.to);
+  return { changed, after: changed.slice(change.cursor).split('\n')[0], collapsed: change.collapsed };
+}
+
+test('moves to the end of the same cell in the row below on Enter, like a spreadsheet, or stays in the last row', () => {
+  const note = '| task | notes |\n| --- | ===== |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
+
+  assert.deepEqual(entered(note, note.indexOf('Tag') + 1), { changed: note, after: ' |', collapsed: false });
+  assert.equal(entered(note, note.indexOf('task') + 1).after, ' | Tag |');
+  assert.equal(entered(note, note.indexOf('Done')).after, ' |');
+  assert.equal(RaindownPlugin.enteredCell(note, note.indexOf('---'), {}), null);
+});
+
+test("collapses a table: block's expanded cell on Enter, joining its + rows back into its row", () => {
+  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+
+  assert.deepEqual(entered(note, note.indexOf('build')), {
+    changed: note.replace('| Release | Tag the |\n+ | build |', '| Release | Tag the build |'), after: ' |', collapsed: true
+  });
+  assert.equal(RaindownPlugin.onExpandedRow(note, note.indexOf('build'), { bare: true }), true);
+  assert.equal(RaindownPlugin.onExpandedRow(note, note.indexOf('Done'), { bare: true }), false);
+});
+
+test("keeps the cursor in its cell when another cell in the row is clipped", () => {
+  const before = '| Milk made with beautiful cows | 54   |';
+  const after = '| Milk made with bea… | 54   |';
+
+  assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: before.indexOf('54') + 2 }, before, after), { line: 0, ch: after.indexOf('54') + 2 });
 });

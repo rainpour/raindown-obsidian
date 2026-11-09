@@ -103,10 +103,21 @@ function tableCommentChanges(current, markdown) {
 }
 
 // Where the cursor belongs on its line once it's changed: after the same text, however its spaces moved, and after a
-// space it just typed, as lining up a table trims that from its cell, where the next word would need it.
+// space it just typed, as lining up a table trims that from its cell, where the next word would need it. In a table's
+// row, it's in the same cell, so another cell clipped or lined up doesn't move it along.
 function movedCursor({ line, ch }, before, after) {
   const head = before.split('\n')[line].slice(0, ch);
   const text = after.split('\n')[line];
+  const [headCells, cells] = [head, text].map((row) => row.split(/(?<!\\)\|/));
+  const cell = headCells.length - 1;
+  if (!/^[ \t]*[|+]/.test(head) || !/^[ \t]*[|+]/.test(text) || cells.length <= cell) return { line, ch: movedWithin(head, text) };
+
+  const start = cells.slice(0, cell).reduce((offset, before) => offset + before.length + 1, 0);
+  return { line, ch: start + movedWithin(headCells[cell], cells[cell]) };
+}
+
+// How far into the text the cursor goes to be after the head's text, however its spaces moved.
+function movedWithin(head, text) {
   const wanted = head.replace(/\s/g, '').length;
   let moved = 0;
   for (let seen = 0; seen < wanted && moved < text.length; moved++) {
@@ -114,7 +125,7 @@ function movedCursor({ line, ch }, before, after) {
   }
   if (/\s$/.test(head) && /\s/.test(text[moved] ?? '')) moved++;
 
-  return { line, ch: moved };
+  return moved;
 }
 
 // The command as it's set, with ~ for the home folder, which only a shell would expand.
@@ -382,6 +393,101 @@ function onDirectiveLine(text, { line }, options) {
 
 // From each directive's name to the end of its line, like toc: or table: data/books.csv, total: true, so the editor
 // doesn't spell check its names, props and paths, while the Markdown it writes below is checked like any other.
+// The row of a table the cursor's in, with the + rows carrying it on: the lines it spans, the column the cursor's in,
+// the line its table starts on, whether it's the header, and the line of the row below it, or null outside a table's
+// rows.
+function tableRowAt(lines, { line, ch }) {
+  const row = (number) => /^\s*[|+]/.test(lines[number] ?? '') && lines[number].trim();
+  let start = line;
+  while (start > 0 && row(start - 1)) start--;
+  if (!row(line) || line === start + 1 || !isTableStart(lines, start)) return null;
+
+  const lead = lines[line].search(/[|+]/);
+  if (ch <= lead) return null;
+
+  let [first, last] = [line, line];
+  while (first > start + 2 && CONTINUATION.test(lines[first])) first--;
+  while (CONTINUATION.test(lines[last + 1] ?? '')) last++;
+  const header = line === start;
+  const below = header ? start + 2 : last + 1;
+  const column = [...lines[line].slice(lead + 1, ch).matchAll(/(?<!\\)\|/g)].length;
+  return { start, first, last, column, header, next: row(below) ? below : null };
+}
+
+// Whether the table starting on the line is a table: block's, below its directive and its comment.
+function underTableDirective(text, lines, start, options) {
+  const above = TABLE_COMMENT.test(lines[start - 1] ?? '') ? start - 1 : start;
+  const directiveEnd = lines.slice(0, above).join('\n').length;
+  return tableFiles(text, options).some(({ at }) => at === directiveEnd);
+}
+
+// Whether the cursor's on a row of a table: block's table that + rows carry on, a cell's full text shown to edit.
+function onExpandedRow(text, offset, options) {
+  const lines = text.split('\n');
+  const row = tableRowAt(lines, positionOf(text, offset));
+  return Boolean(row && row.last > row.first && underTableDirective(text, lines, row.start, options));
+}
+
+// Where the cursor goes to be at the end of a cell's text in a row's line: after its last letter, or inside it when
+// it's empty.
+function cellEndIn(line, column) {
+  const lead = line.search(/[|+]/);
+  const pipes = [...line.matchAll(/(?<!\\)\|/g)].map(({ index }) => index).filter((index) => index > lead);
+  const from = column === 0 ? lead + 1 : pipes[column - 1] + 1;
+  if (Number.isNaN(from)) return line.length;
+
+  return from + Math.max(1, line.slice(from, pipes[column] ?? line.length).trimEnd().length);
+}
+
+// A row and its + rows as one line, each cell's parts joined with spaces.
+function joinedRow(rows) {
+  const cells = rows.map(tableCells);
+  const joined = cells[0].map((_, column) => cells.map((row) => row[column] ?? '').filter(Boolean).join(' '));
+  return `${rows[0].match(/^[ \t]*/)[0]}| ${joined.join(' | ')} |`;
+}
+
+// The change Enter makes in a table's row, like in a spreadsheet: done with the cell, moving the cursor to the end of the
+// same cell in the row below, or of its own in the last row. In a table: block's table, a row's + rows are joined back
+// into it first, so Raindown clips its cells again. As offsets, with whether it collapsed, or null outside a table's
+// rows.
+function enteredCell(text, offset, options) {
+  const lines = text.split('\n');
+  const row = tableRowAt(lines, positionOf(text, offset));
+  if (!row) return null;
+
+  const rows = lines.slice(row.first, row.last + 1);
+  const collapsed = row.last > row.first && underTableDirective(text, lines, row.start, options);
+  const insert = collapsed ? joinedRow(rows) : rows.join('\n');
+  const from = offsetOf(text, { line: row.first, ch: 0 });
+  const to = offsetOf(text, { line: row.last, ch: lines[row.last].length });
+  const after = text.slice(0, from) + insert + text.slice(to);
+  const target = row.next === null ? row.first : row.next - (collapsed ? rows.length - 1 : 0);
+  const cursor = offsetOf(after, { line: target, ch: cellEndIn(after.split('\n')[target], row.column) });
+
+  return { from, to, insert, cursor, collapsed };
+}
+
+// The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a + row below the
+// cursor's row carrying the cell on, with what's after the cursor in it, rather than splitting the row, which would
+// end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header.
+function carriedOnCell(text, offset) {
+  const lines = text.split('\n');
+  const { line, ch } = positionOf(text, offset);
+  const row = tableRowAt(lines, { line, ch });
+  if (!row || row.header) return null;
+
+  const { column } = row;
+  const current = lines[line];
+  const cellEnd = current.slice(ch).search(/(?<!\\)\|/);
+  const end = cellEnd === -1 ? current.length : ch + cellEnd;
+  const carried = `+ ${' | '.repeat(column)}`;
+  const cells = tableCells(lines[row.start + 1]).map((_, index) => (index === column ? current.slice(ch, end).trim() : ''));
+  const from = offsetOf(text, { line, ch: 0 });
+  const insert = `${current.slice(0, ch).trimEnd()} ${current.slice(end)}\n+ ${cells.join(' | ')} |`;
+
+  return { from, to: from + current.length, insert, cursor: from + insert.indexOf('\n') + 1 + carried.length };
+}
+
 function directiveLines(text, tokens) {
   return tokens.filter(({ type }) => ['name', 'self-closing'].includes(type)).map(({ from }) => {
     let to = text.indexOf('\n', from);
@@ -453,13 +559,15 @@ function typingDelay(editor) {
   return TYPING_DELAY;
 }
 
-// The start of each line of a Markdown table, as Raindown's columns only line up in a monospace font.
+// The start of each line of a Markdown table, and its + rows, as Raindown's columns only line up in a monospace font.
 function tableLines(markdown) {
-  return [...markdown.matchAll(/^[ \t]*\|.*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
+  return [...markdown.matchAll(/^[ \t]*[|+].*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
 }
 
 // Lining up tables as they're typed, the same as Raindown's TableFormatter, so its write-back finds them lined up.
-const DELIMITER_CELL = /^:?-+:?$/;
+const DELIMITER_CELL = /^:?[-=]+:?$/;
+// A row carrying on the one above it, which Raindown joins into its cells.
+const CONTINUATION = /^[ \t\n\v\f\r]*\+/;
 const FENCE = /^\s*(```|~~~)/;
 // Ruby's strip, which leaves other spaces, like a no-break space, in the cell.
 const STRIP = /^[ \t\n\v\f\r\0]+|[ \t\n\v\f\r\0]+$/g;
@@ -479,10 +587,14 @@ function displayWidth(text) {
   return width;
 }
 
-// A row's cells, split on pipes that aren't escaped, without its outer pipes.
+function rowStart(line) {
+  return CONTINUATION.test(line) ? '+' : '|';
+}
+
+// A row's cells, split on pipes that aren't escaped, without its outer pipes, or the + starting a continuation row.
 function tableCells(line) {
   let content = line.replace(STRIP, '');
-  if (content.startsWith('|')) content = content.slice(1);
+  if (content.startsWith(rowStart(line))) content = content.slice(1);
   if (content.endsWith('|') && !content.endsWith('\\|')) content = content.slice(0, -1);
   if (!content) return [];
 
@@ -491,7 +603,7 @@ function tableCells(line) {
 
 function isTableStart(lines, index) {
   const [header, delimiter] = [lines[index], lines[index + 1]];
-  if (!header.includes('|') || delimiter === undefined) return false;
+  if (!header.includes('|') || delimiter === undefined || CONTINUATION.test(header)) return false;
 
   const cells = tableCells(delimiter);
   if (!cells.length || cells.length !== tableCells(header).length) return false;
@@ -499,43 +611,46 @@ function isTableStart(lines, index) {
   return cells.every((cell) => DELIMITER_CELL.test(cell));
 }
 
-function columnAlignment(cell) {
-  if (cell.startsWith(':') && cell.endsWith(':')) return 'center';
-  if (cell.endsWith(':')) return 'right';
-  if (cell.startsWith(':')) return 'left';
-  return null;
+// A column, like Raindown's TableColumn: its alignment, from its delimiter cell's colons, and its width, that of its
+// widest cell, or as wide as its delimiter when that's equals signs, which is fixed, letting a longer cell run past.
+function tableColumn(delimiter, cells) {
+  const fixed = delimiter.includes('=');
+  const width = fixed ? delimiter.length : Math.max(3, ...cells.map(displayWidth));
+  const dash = fixed ? '=' : '-';
+  let alignment = null;
+  if (delimiter.startsWith(':') && delimiter.endsWith(':')) alignment = 'center';
+  else if (delimiter.endsWith(':')) alignment = 'right';
+  else if (delimiter.startsWith(':')) alignment = 'left';
+
+  return {
+    pad(cell) {
+      const padding = Math.max(0, width - displayWidth(cell));
+      if (alignment === 'center') return ' '.repeat(Math.floor(padding / 2)) + cell + ' '.repeat(Math.ceil(padding / 2));
+      if (alignment === 'right') return ' '.repeat(padding) + cell;
+      return cell + ' '.repeat(padding);
+    },
+    delimiterCell() {
+      if (alignment === 'center') return `:${dash.repeat(width - 2)}:`;
+      if (alignment === 'right') return `${dash.repeat(width - 1)}:`;
+      if (alignment === 'left') return `:${dash.repeat(width - 1)}`;
+      return dash.repeat(width);
+    }
+  };
 }
 
-function paddedCell(cell, width, alignment) {
-  const padding = width - displayWidth(cell);
-  if (alignment === 'center') return ' '.repeat(Math.floor(padding / 2)) + cell + ' '.repeat(Math.ceil(padding / 2));
-  if (alignment === 'right') return ' '.repeat(padding) + cell;
-  return cell + ' '.repeat(padding);
-}
-
-function delimiterCell(width, alignment) {
-  if (alignment === 'center') return `:${'-'.repeat(width - 2)}:`;
-  if (alignment === 'right') return `${'-'.repeat(width - 1)}:`;
-  if (alignment === 'left') return `:${'-'.repeat(width - 1)}`;
-  return '-'.repeat(width);
-}
-
-// A table's lines with each column padded to its widest cell, or as they were when a row has more cells than its
-// header.
+// A table's lines with each column padded to fit, keeping each row's + when it carries on the row above, or as they
+// were when a row has more cells than its header.
 function alignedTable(table) {
   const indent = table[0].match(/^[ \t\n\v\f\r]*/)[0];
   const [header, delimiter, ...body] = table.map(tableCells);
   if (body.some((row) => row.length > header.length)) return table;
 
   const rows = [header, ...body.map((row) => [...row, ...Array(header.length - row.length).fill('')])];
-  const alignments = delimiter.map(columnAlignment);
-  const widths = header.map((_, column) => Math.max(3, ...rows.map((row) => displayWidth(row[column]))));
-  const line = (cells) => `${indent}| ${cells.join(' | ')} |`;
-  const padded = (row) => line(row.map((cell, column) => paddedCell(cell, widths[column], alignments[column])));
+  const columns = delimiter.map((cell, column) => tableColumn(cell, rows.map((row) => row[column])));
+  const line = (start, cells) => `${indent}${start} ${cells.join(' | ')} |`;
+  const lines = [table[0], ...table.slice(2)].map((original, row) => line(rowStart(original), rows[row].map((cell, column) => columns[column].pad(cell))));
 
-  const delimiters = widths.map((width, column) => delimiterCell(width, alignments[column]));
-
-  return [padded(rows[0]), line(delimiters), ...rows.slice(1).map(padded)];
+  return [lines[0], line('|', columns.map((column) => column.delimiterCell())), ...lines.slice(1)];
 }
 
 // The note with every table lined up, outside code. Like Raindown, one lined up at the very end gets a line break
@@ -678,30 +793,52 @@ function highlighting(plugin) {
   }, { decorations: (instance) => instance.decorations });
 }
 
+// Carries a table's cell on onto a + row on Option or Alt and Enter, typed like any key, so the table's lined up.
+function carryOnCell(view) {
+  const change = carriedOnCell(view.state.doc.toString(), view.state.selection.main.head);
+  if (!change) return false;
+
+  view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, selection: { anchor: change.cursor }, userEvent: 'input' });
+  return true;
+}
+
 // The editor extension for a held write-back: a hint at the end of the directive's line, Enter there to write back
 // without a new line, and writing back once the cursor's left the line.
 function heldWriteBacks(plugin) {
   const { Decoration, ViewPlugin, WidgetType, keymap } = require('@codemirror/view');
   const { Prec } = require('@codemirror/state');
   class HintWidget extends WidgetType {
-    eq() {
-      return true;
+    constructor(text) {
+      super();
+      this.text = text;
+    }
+
+    eq(other) {
+      return other.text === this.text;
     }
 
     toDOM() {
       const hint = document.createElement('span');
       hint.className = 'cm-raindown-hint';
-      hint.textContent = '↵ Enter to update';
+      hint.textContent = this.text;
       return hint;
     }
   }
-  const hint = Decoration.widget({ widget: new HintWidget(), side: 1 });
+  const hints = {
+    held: Decoration.widget({ widget: new HintWidget('↵ Enter to update'), side: 1 }),
+    expanded: Decoration.widget({ widget: new HintWidget('↵ Enter to collapse'), side: 1 })
+  };
   const infoFor = (view) => view.state.field(editorInfoField, false);
+  // The hint for a held write-back, or for an expanded cell, which is only looked for on a table's lines.
   const decorate = (view) => {
     const info = infoFor(view);
-    if (!info?.file || !plugin.held.has(info.file.path)) return Decoration.none;
+    const { head } = view.state.selection.main;
+    const line = view.state.doc.lineAt(head);
+    if (!info?.file) return Decoration.none;
+    if (plugin.held.has(info.file.path)) return Decoration.set([hints.held.range(line.to)]);
+    if (!/^\s*[|+]/.test(line.text) || !onExpandedRow(view.state.doc.toString(), head, { bare: plugin.settings.bareSyntax })) return Decoration.none;
 
-    return Decoration.set([hint.range(view.state.doc.lineAt(view.state.selection.main.head).to)]);
+    return Decoration.set([hints.expanded.range(line.to)]);
   };
 
   return [
@@ -712,7 +849,10 @@ function heldWriteBacks(plugin) {
         this.decorations = decorate(update.view);
       }
     }, { decorations: (instance) => instance.decorations }),
-    Prec.high(keymap.of([{ key: 'Enter', run: (view) => plugin.confirmHeld(infoFor(view)) }]))
+    Prec.high(keymap.of([
+      { key: 'Enter', run: (view) => plugin.confirmHeld(infoFor(view)) || plugin.enterInTable(view, infoFor(view)) },
+      { key: 'Alt-Enter', run: carryOnCell }
+    ]))
   ];
 }
 
@@ -952,6 +1092,17 @@ class RaindownPlugin extends Plugin {
   }
 
   // Enter on a held directive's line writes back, rather than starting a new line, which would split the directive.
+  // Enter in a table's row. Collapsing a cell writes back twice: once for what was typed in it, then again, as Raindown
+  // only clips a cell typed into the next time it writes its table.
+  enterInTable(view, info) {
+    const change = enteredCell(view.state.doc.toString(), view.state.selection.main.head, { bare: this.settings.bareSyntax });
+    if (!change) return false;
+
+    view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, selection: { anchor: change.cursor }, userEvent: 'input' });
+    if (change.collapsed && info?.file) this.writeBackInTurn(info.file).then(() => this.writeBackInTurn(info.file, { force: true }));
+    return true;
+  }
+
   confirmHeld(info) {
     if (!info?.file || !this.held.has(info.file.path)) return false;
     if (!onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), { bare: this.settings.bareSyntax })) return false;
@@ -1227,6 +1378,6 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
-  tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
+  carriedOnCell, enteredCell, onExpandedRow, tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });
