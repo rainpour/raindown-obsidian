@@ -397,7 +397,7 @@ function onDirectiveLine(text, { line }, options) {
 
 // From each directive's name to the end of its line, like toc: or table: data/books.csv, total: true, so the editor
 // doesn't spell check its names, props and paths, while the Markdown it writes below is checked like any other.
-// The row of a table the cursor's in, with the + rows carrying it on: the lines it spans, the column the cursor's in,
+// The row of a table the cursor's in, with the |+ rows carrying it on: the lines it spans, the column the cursor's in,
 // the line its table starts on, whether it's the header, and the line of the row below it, or null outside a table's
 // rows.
 function tableRowAt(lines, { line, ch }) {
@@ -425,7 +425,7 @@ function underTableDirective(text, lines, start, options) {
   return tableFiles(text, options).some(({ at }) => at === directiveEnd);
 }
 
-// What Enter does to the cell the cursor's in, in a table: block's table: 'collapse' a cell shown in full on + rows, or
+// What Enter does to the cell the cursor's in, in a table: block's table: 'collapse' a cell shown in full on |+ rows, or
 // 'expand' one cut to fit, ending in an ellipsis, deleting it so Raindown shows its full text. Elsewhere it's null, and
 // Enter only moves to the row below.
 function cellToggle(text, lines, row, options) {
@@ -435,7 +435,7 @@ function cellToggle(text, lines, row, options) {
   return null;
 }
 
-// Whether the cursor's in a table: block's fixed column, like |=====|, or on the + rows of a cell in one.
+// Whether the cursor's in a table: block's fixed column, like |=====|, or on the |+ rows of a cell in one.
 function inFixedCell(text, cursor, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, cursor);
@@ -453,9 +453,9 @@ function cellToggleAt(text, offset, options) {
 
 // Where a cell is in a row's line, from after the pipe before it to the pipe after it, or null past its last.
 function cellBounds(line, column) {
-  const lead = line.search(/[|+]/);
-  const pipes = [...line.matchAll(/(?<!\\)\|/g)].map(({ index }) => index).filter((index) => index > lead);
-  const from = column === 0 ? lead + 1 : pipes[column - 1] + 1;
+  const lead = line.match(/^[ \t]*\|\+?/)?.[0].length ?? 0;
+  const pipes = [...line.matchAll(/(?<!\\)\|/g)].map(({ index }) => index).filter((index) => index >= lead);
+  const from = column === 0 ? lead : pipes[column - 1] + 1;
   if (Number.isNaN(from)) return null;
 
   return { from, to: pipes[column] ?? line.length };
@@ -476,7 +476,7 @@ function emptyRow(lines, row) {
   return `${lines[row.first].match(/^[ \t]*/)[0]}| ${cells.join(' | ')} |`;
 }
 
-// A row and its + rows as one line, each cell's parts joined with spaces.
+// A row and its |+ rows as one line, each cell's parts joined with spaces.
 function joinedRow(rows) {
   const cells = rows.map(tableCells);
   const joined = cells[0].map((_, column) => cells.map((row) => row[column] ?? '').filter(Boolean).join(' '));
@@ -485,7 +485,7 @@ function joinedRow(rows) {
 
 // The change Enter makes in a table's row, like in a spreadsheet: done with the cell, moving the cursor to the end of the
 // same cell in the row below, which is added in the last row. In a table: block's table, it expands a cell cut to fit,
-// staying in it, and collapses one shown in full, joining its + rows back into its row first, so Raindown clips it
+// staying in it, and collapses one shown in full, joining its |+ rows back into its row first, so Raindown clips it
 // again. As offsets, with what it toggled, or null outside a table's rows.
 function enteredCell(text, offset, options) {
   const lines = text.split('\n');
@@ -539,7 +539,7 @@ function tabbedCell(text, offset, { back = false } = {}) {
   return above < row.start ? at(line, row.column) : at(above, columns - 1);
 }
 
-// The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a + row below the
+// The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a |+ row below the
 // cursor's row carrying the cell on, with what's after the cursor in it, rather than splitting the row, which would
 // end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header.
 function carriedOnCell(text, offset) {
@@ -552,10 +552,10 @@ function carriedOnCell(text, offset) {
   const current = lines[line];
   const cellEnd = current.slice(ch).search(/(?<!\\)\|/);
   const end = cellEnd === -1 ? current.length : ch + cellEnd;
-  const carried = `+ ${' | '.repeat(column)}`;
+  const carried = `|+${' | '.repeat(column)}`;
   const cells = tableCells(lines[row.start + 1]).map((_, index) => (index === column ? current.slice(ch, end).trim() : ''));
   const from = offsetOf(text, { line, ch: 0 });
-  const insert = `${current.slice(0, ch).trimEnd()} ${current.slice(end)}\n+ ${cells.join(' | ')} |`;
+  const insert = `${current.slice(0, ch).trimEnd()} ${current.slice(end)}\n|+${cells.join(' | ')} |`;
 
   return { from, to: from + current.length, insert, cursor: from + insert.indexOf('\n') + 1 + carried.length };
 }
@@ -631,28 +631,30 @@ function typingDelay(editor) {
   return TYPING_DELAY;
 }
 
-// The start of each line of a Markdown table, and its + rows, as Raindown's columns only line up in a monospace font,
-// with its header, to show in the accent colour, and its delimiter row, its pipes, and the + starting a row carrying
-// one on, to show faint.
+// The start of each line of a Markdown table, and its |+ rows, as Raindown's columns only line up in a monospace font,
+// with its header, to show in bold, its delimiter row, to show muted, and its pipes, to show faint, but for those of a
+// row carrying one on, its |+ and pipes, in the accent colour.
 function tableLines(markdown) {
   const lines = markdown.split('\n');
   let offset = 0;
   return lines.flatMap((line, number) => {
     const from = offset;
     offset += line.length + 1;
-    if (!/^[ \t]*[|+].*\|[ \t]*$/.test(line)) return [];
+    if (!/^[ \t]*\|.*\|[ \t]*$/.test(line)) return [];
 
     const header = isTableStart(lines, number) ? [{ from, to: from + line.length, type: 'table-header' }] : [];
     const delimiter = number > 0 && isTableStart(lines, number - 1) ? [{ from, to: from + line.length, type: 'table-delimiter' }] : [];
-    const pipes = [...line.matchAll(/(?<!\\)\||(?<=^[ \t]*)\+/g)].map(({ index }) => ({ from: from + index, to: from + index + 1, type: 'table-pipe' }));
+    // A row carrying on the one above has its |+ and pipes in the accent colour, so it's plain it's part of that row.
+    const type = CONTINUATION.test(line) ? 'table-expansion' : 'table-pipe';
+    const pipes = [...line.matchAll(/(?<!\\)\||(?<=^[ \t]*\|)\+/g)].map(({ index }) => ({ from: from + index, to: from + index + 1, type }));
     return [{ from, type: 'table' }, ...header, ...delimiter, ...pipes];
   });
 }
 
 // Lining up tables as they're typed, the same as Raindown's TableFormatter, so its write-back finds them lined up.
 const DELIMITER_CELL = /^:?[-=]+:?$/;
-// A row carrying on the one above it, which Raindown joins into its cells.
-const CONTINUATION = /^[ \t\n\v\f\r]*\+/;
+// A row carrying on the one above it, starting with |+ in place of a row's "| ", which Raindown joins into its cells.
+const CONTINUATION = /^[ \t\n\v\f\r]*\|\+/;
 const FENCE = /^\s*(```|~~~)/;
 // Ruby's strip, which leaves other spaces, like a no-break space, in the cell.
 const STRIP = /^[ \t\n\v\f\r\0]+|[ \t\n\v\f\r\0]+$/g;
@@ -672,14 +674,16 @@ function displayWidth(text) {
   return width;
 }
 
-function rowStart(line) {
-  return CONTINUATION.test(line) ? '+' : '|';
+// How a row's line starts, before its first cell: |+ when it carries on the row above, as wide as a row's "| ".
+function rowLead(line) {
+  return CONTINUATION.test(line) ? '|+' : '| ';
 }
 
-// A row's cells, split on pipes that aren't escaped, without its outer pipes, or the + starting a continuation row.
+// A row's cells, split on pipes that aren't escaped, without its outer pipes, or the |+ starting a continuation row.
 function tableCells(line) {
   let content = line.replace(STRIP, '');
-  if (content.startsWith(rowStart(line))) content = content.slice(1);
+  const lead = rowLead(line).trimEnd();
+  if (content.startsWith(lead)) content = content.slice(lead.length);
   if (content.endsWith('|') && !content.endsWith('\\|')) content = content.slice(0, -1);
   if (!content) return [];
 
@@ -741,10 +745,10 @@ function alignedTable(table) {
 
   const rows = [header, ...body.map((row) => [...row, ...Array(header.length - row.length).fill('')])];
   const columns = delimiter.map((cell, column) => tableColumn(cell, rows.map((row) => row[column])));
-  const line = (start, cells) => `${indent}${start} ${cells.join(' | ')} |`;
-  const lines = [table[0], ...table.slice(2)].map((original, row) => line(rowStart(original), rows[row].map((cell, column) => columns[column].pad(cell))));
+  const line = (lead, cells) => `${indent}${lead}${cells.join(' | ')} |`;
+  const lines = [table[0], ...table.slice(2)].map((original, row) => line(rowLead(original), rows[row].map((cell, column) => columns[column].pad(cell))));
 
-  return [lines[0], line('|', columns.map((column) => column.delimiterCell())), ...lines.slice(1)];
+  return [lines[0], line('| ', columns.map((column) => column.delimiterCell())), ...lines.slice(1)];
 }
 
 // The note with every table lined up, outside code. Like Raindown, one lined up at the very end gets a line break
@@ -887,7 +891,7 @@ function highlighting(plugin) {
   }, { decorations: (instance) => instance.decorations });
 }
 
-// Carries a table's cell on onto a + row on Option or Alt and Enter, typed like any key, so the table's lined up.
+// Carries a table's cell on onto a |+ row on Option or Alt and Enter, typed like any key, so the table's lined up.
 function carryOnCell(view) {
   const change = carriedOnCell(view.state.doc.toString(), view.state.selection.main.head);
   if (!change) return false;

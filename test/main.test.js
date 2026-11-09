@@ -554,14 +554,15 @@ test("underlines the line of a directive Raindown couldn't run, while writing ba
 });
 
 test('finds the start of each line of a table, and no others, with its header, delimiter row and pipes', () => {
-  const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n+ | 3 |\n\nnot | a table |\n';
+  const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n|+ | 3 |\n+ a list |\n\nnot | a table |\n';
 
   const lines = RaindownPlugin.tableLines(text);
 
-  assert.deepEqual(lines.filter(({ type }) => type === 'table').map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |', '+ | 3 |']);
+  assert.deepEqual(lines.filter(({ type }) => type === 'table').map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |', '|+ | 3 |']);
   assert.deepEqual(lines.filter(({ type }) => type === 'table-header').map(({ from, to }) => text.slice(from, to)), ['| a | b |']);
   assert.deepEqual(lines.filter(({ type }) => type === 'table-delimiter').map(({ from, to }) => text.slice(from, to)), ['| - | - |']);
-  assert.deepEqual(lines.filter(({ type }) => type === 'table-pipe').map(({ from, to }) => text.slice(from, to)).join(''), '|||||||||+||');
+  assert.deepEqual(lines.filter(({ type }) => type === 'table-pipe').map(({ from, to }) => text.slice(from, to)).join(''), '|||||||||');
+  assert.deepEqual(lines.filter(({ type }) => type === 'table-expansion').map(({ from, to }) => text.slice(from, to)).join(''), '|+||');
 });
 
 test('changes each changed line on its own, last first, so a table lined up again keeps the cursor out of them', () => {
@@ -698,8 +699,8 @@ test('lines up tables in the same change as what was typed, and not for other ch
 });
 
 test('keeps a column with equals signs as wide as they are, and lines up + rows, keeping their +', () => {
-  assert.equal(RaindownPlugin.alignTables('| name | notes |\n|-|:======|\n| Ada | Tag the |\n+ | build |\n| Lin | far too long |\n'),
-    '| name | notes   |\n| ---- | :====== |\n| Ada  | Tag the |\n+      | build   |\n| Lin  | far too long |\n');
+  assert.equal(RaindownPlugin.alignTables('| name | notes |\n|-|:======|\n| Ada | Tag the |\n|+| build |\n| Lin | far too long |\n'),
+    '| name | notes   |\n| ---- | :====== |\n| Ada  | Tag the |\n|+     | build   |\n| Lin  | far too long |\n');
 });
 
 test('carries a cell on onto a + row on Option or Alt and Enter, with what is after the cursor, but not in the header', () => {
@@ -708,7 +709,7 @@ test('carries a cell on onto a + row on Option or Alt and Enter, with what is af
   const change = RaindownPlugin.carriedOnCell(note, at);
   const changed = note.slice(0, change.from) + change.insert + note.slice(change.to);
 
-  assert.equal(changed, '| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+  | build |\n');
+  assert.equal(changed, '| task | notes |\n| --- | ===== |\n| Release | Tag the |\n|+ | build |\n');
   assert.equal(changed.slice(change.cursor), 'build |\n');
   assert.notEqual(RaindownPlugin.carriedOnCell(note, note.indexOf('Release') + 2), null);
   assert.equal(RaindownPlugin.carriedOnCell(note, note.indexOf('notes')), null);
@@ -722,7 +723,7 @@ function entered(note, at, options = { bare: true }) {
 }
 
 test('moves to the end of the same cell in the row below on Enter, like a spreadsheet, adding one below the last row', () => {
-  const note = '| task | notes |\n| --- | ===== |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
+  const note = '| task | notes |\n| --- | ===== |\n| Release | Tag |\n|+ | the build |\n| Docs | Done |\n';
 
   assert.deepEqual(entered(note, note.indexOf('Tag') + 1), { changed: note, after: ' |', toggle: null });
   assert.equal(entered(note, note.indexOf('task') + 1).after, ' | Tag |');
@@ -733,10 +734,10 @@ test('moves to the end of the same cell in the row below on Enter, like a spread
 });
 
 test("collapses a table: block's expanded cell on Enter, joining its + rows back into its row", () => {
-  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n|+ | build |\n| Docs | Done |\n";
 
   assert.deepEqual(entered(note, note.indexOf('build')), {
-    changed: note.replace('| Release | Tag the |\n+ | build |', '| Release | Tag the build |'), after: ' |', toggle: 'collapse'
+    changed: note.replace('| Release | Tag the |\n|+ | build |', '| Release | Tag the build |'), after: ' |', toggle: 'collapse'
   });
   assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('build'), { bare: true }), 'collapse');
   assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('Done'), { bare: true }), null);
@@ -765,7 +766,7 @@ test('keeps the cursor after the last letter of a cell clipped as it was typed i
 });
 
 test("knows when the cursor's in a table: block's fixed column, where typing isn't written back", () => {
-  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n|+ | build |\n| Docs | Done |\n";
   const at = (line, ch, text = note) => RaindownPlugin.inFixedCell(text, { line, ch }, { bare: true });
 
   assert.deepEqual([at(4, 13), at(5, 5), at(6, 10), at(2, 10)], [true, true, true, true]);
@@ -785,7 +786,7 @@ test("takes any comment on its own line for a node's comment, but not a directiv
 });
 
 test('moves to the next cell on Tab, and back on Shift and Tab, across rows, staying put at either end', () => {
-  const note = '| task | notes |\n| --- | ----- |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
+  const note = '| task | notes |\n| --- | ----- |\n| Release | Tag |\n|+ | the build |\n| Docs | Done |\n';
   // The text after the cursor on its line once Tab's moved it.
   const tab = (from, options) => note.slice(RaindownPlugin.tabbedCell(note, note.indexOf(from), options)).split('\n')[0];
 
@@ -802,7 +803,7 @@ test('moves to the next cell on Tab, and back on Shift and Tab, across rows, sta
 });
 
 test("collapses a table: block's expanded cell in its last row on Enter, then adds a row below it", () => {
-  const note = "table: 'tasks.csv'\n<!-- 1 row · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n";
+  const note = "table: 'tasks.csv'\n<!-- 1 row · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n|+ | build |\n";
 
-  assert.equal(entered(note, note.indexOf('build')).changed, note.replace('| Release | Tag the |\n+ | build |\n', '| Release | Tag the build |\n|  |  |\n'));
+  assert.equal(entered(note, note.indexOf('build')).changed, note.replace('| Release | Tag the |\n|+ | build |\n', '| Release | Tag the build |\n|  |  |\n'));
 });

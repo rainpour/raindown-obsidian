@@ -26,3 +26,6 @@
 .markdown-source-view.mod-cm6 .cm-raindown-table-header { font-weight: var(--font-bold); }
 .markdown-source-view.mod-cm6 .cm-raindown-table-delimiter { color: var(--text-muted); }
 .markdown-source-view.mod-cm6 .cm-raindown-table-pipe { color: var(--text-faint); font-weight: var(--font-normal); }
+/* A row carrying on the one above, an expanded cell's text, has its |+ and pipes in the accent colour, so it's plain
+   it's part of it. */
+.markdown-source-view.mod-cm6 .cm-raindown-table-expansion { color: var(--text-accent); font-weight: var(--font-normal); }
