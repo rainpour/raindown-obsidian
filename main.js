@@ -119,10 +119,12 @@ function movedCursor({ line, ch }, before, after) {
 // How far into the text the cursor goes to be after the head's text, however its spaces moved.
 function movedWithin(head, text) {
   const wanted = head.replace(/\s/g, '').length;
-  let moved = 0;
-  for (let seen = 0; seen < wanted && moved < text.length; moved++) {
+  let [moved, seen] = [0, 0];
+  for (; seen < wanted && moved < text.length; moved++) {
     if (!/\s/.test(text[moved])) seen++;
   }
+  // Text that's shorter now, like a cell clipped, has the cursor after its last letter, not its padding.
+  if (seen < wanted) return text.trimEnd().length;
   if (/\s$/.test(head) && /\s/.test(text[moved] ?? '')) moved++;
 
   return moved;
@@ -421,22 +423,49 @@ function underTableDirective(text, lines, start, options) {
   return tableFiles(text, options).some(({ at }) => at === directiveEnd);
 }
 
-// Whether the cursor's on a row of a table: block's table that + rows carry on, a cell's full text shown to edit.
-function onExpandedRow(text, offset, options) {
+// What Enter does to the cell the cursor's in, in a table: block's table: 'collapse' a cell shown in full on + rows, or
+// 'expand' one cut to fit, ending in an ellipsis, deleting it so Raindown shows its full text. Elsewhere it's null, and
+// Enter only moves to the row below.
+function cellToggle(text, lines, row, options) {
+  if (!underTableDirective(text, lines, row.start, options)) return null;
+  if (row.last > row.first) return 'collapse';
+  if (tableCells(lines[row.first])[row.column]?.endsWith('…')) return 'expand';
+  return null;
+}
+
+// Whether the cursor's in a table: block's fixed column, like |=====|, or on the + rows of a cell in one.
+function inFixedCell(text, cursor, options) {
+  const lines = text.split('\n');
+  const row = tableRowAt(lines, cursor);
+  if (!row || !tableCells(lines[row.start + 1])[row.column]?.includes('=')) return false;
+
+  return underTableDirective(text, lines, row.start, options);
+}
+
+// What Enter does to the cell at the offset, for its hint.
+function cellToggleAt(text, offset, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, positionOf(text, offset));
-  return Boolean(row && row.last > row.first && underTableDirective(text, lines, row.start, options));
+  return row && cellToggle(text, lines, row, options);
+}
+
+// Where a cell is in a row's line, from after the pipe before it to the pipe after it, or null past its last.
+function cellBounds(line, column) {
+  const lead = line.search(/[|+]/);
+  const pipes = [...line.matchAll(/(?<!\\)\|/g)].map(({ index }) => index).filter((index) => index > lead);
+  const from = column === 0 ? lead + 1 : pipes[column - 1] + 1;
+  if (Number.isNaN(from)) return null;
+
+  return { from, to: pipes[column] ?? line.length };
 }
 
 // Where the cursor goes to be at the end of a cell's text in a row's line: after its last letter, or inside it when
 // it's empty.
 function cellEndIn(line, column) {
-  const lead = line.search(/[|+]/);
-  const pipes = [...line.matchAll(/(?<!\\)\|/g)].map(({ index }) => index).filter((index) => index > lead);
-  const from = column === 0 ? lead + 1 : pipes[column - 1] + 1;
-  if (Number.isNaN(from)) return line.length;
+  const cell = cellBounds(line, column);
+  if (!cell) return line.length;
 
-  return from + Math.max(1, line.slice(from, pipes[column] ?? line.length).trimEnd().length);
+  return cell.from + Math.max(1, line.slice(cell.from, cell.to).trimEnd().length);
 }
 
 // A row and its + rows as one line, each cell's parts joined with spaces.
@@ -447,16 +476,19 @@ function joinedRow(rows) {
 }
 
 // The change Enter makes in a table's row, like in a spreadsheet: done with the cell, moving the cursor to the end of the
-// same cell in the row below, or of its own in the last row. In a table: block's table, a row's + rows are joined back
-// into it first, so Raindown clips its cells again. As offsets, with whether it collapsed, or null outside a table's
-// rows.
+// same cell in the row below, or of its own in the last row. In a table: block's table, it expands a cell cut to fit,
+// staying in it, and collapses one shown in full, joining its + rows back into its row first, so Raindown clips it
+// again. As offsets, with what it toggled, or null outside a table's rows.
 function enteredCell(text, offset, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, positionOf(text, offset));
   if (!row) return null;
 
+  const toggle = cellToggle(text, lines, row, options);
+  if (toggle === 'expand') return expandedCell(text, lines, row);
+
   const rows = lines.slice(row.first, row.last + 1);
-  const collapsed = row.last > row.first && underTableDirective(text, lines, row.start, options);
+  const collapsed = toggle === 'collapse';
   const insert = collapsed ? joinedRow(rows) : rows.join('\n');
   const from = offsetOf(text, { line: row.first, ch: 0 });
   const to = offsetOf(text, { line: row.last, ch: lines[row.last].length });
@@ -464,7 +496,15 @@ function enteredCell(text, offset, options) {
   const target = row.next === null ? row.first : row.next - (collapsed ? rows.length - 1 : 0);
   const cursor = offsetOf(after, { line: target, ch: cellEndIn(after.split('\n')[target], row.column) });
 
-  return { from, to, insert, cursor, collapsed };
+  return { from, to, insert, cursor, toggle };
+}
+
+// The change expanding a cell cut to fit: its ellipsis deleted, with the cursor where it was.
+function expandedCell(text, lines, row) {
+  const line = lines[row.first];
+  const cell = cellBounds(line, row.column);
+  const at = offsetOf(text, { line: row.first, ch: line.lastIndexOf('…', cell.to) });
+  return { from: at, to: at + 1, insert: '', cursor: at, toggle: 'expand' };
 }
 
 // The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a + row below the
@@ -826,19 +866,21 @@ function heldWriteBacks(plugin) {
   }
   const hints = {
     held: Decoration.widget({ widget: new HintWidget('↵ Enter to update'), side: 1 }),
-    expanded: Decoration.widget({ widget: new HintWidget('↵ Enter to collapse'), side: 1 })
+    collapse: Decoration.widget({ widget: new HintWidget('↵ Enter to collapse'), side: 1 }),
+    expand: Decoration.widget({ widget: new HintWidget('↵ Enter to expand'), side: 1 })
   };
   const infoFor = (view) => view.state.field(editorInfoField, false);
-  // The hint for a held write-back, or for an expanded cell, which is only looked for on a table's lines.
+  // The hint for a held write-back, or for what Enter does to a table: block's cell, only looked for on a table's lines.
   const decorate = (view) => {
     const info = infoFor(view);
     const { head } = view.state.selection.main;
     const line = view.state.doc.lineAt(head);
     if (!info?.file) return Decoration.none;
     if (plugin.held.has(info.file.path)) return Decoration.set([hints.held.range(line.to)]);
-    if (!/^\s*[|+]/.test(line.text) || !onExpandedRow(view.state.doc.toString(), head, { bare: plugin.settings.bareSyntax })) return Decoration.none;
+    if (!/^\s*[|+]/.test(line.text)) return Decoration.none;
 
-    return Decoration.set([hints.expanded.range(line.to)]);
+    const toggle = cellToggleAt(view.state.doc.toString(), head, { bare: plugin.settings.bareSyntax });
+    return toggle ? Decoration.set([hints[toggle].range(line.to)]) : Decoration.none;
   };
 
   return [
@@ -851,7 +893,8 @@ function heldWriteBacks(plugin) {
     }, { decorations: (instance) => instance.decorations }),
     Prec.high(keymap.of([
       { key: 'Enter', run: (view) => plugin.confirmHeld(infoFor(view)) || plugin.enterInTable(view, infoFor(view)) },
-      { key: 'Alt-Enter', run: carryOnCell }
+      { key: 'Alt-Enter', run: carryOnCell },
+      { key: 'Mod-s', run: (view) => plugin.writeBackOnSave(infoFor(view)) }
     ]))
   ];
 }
@@ -947,9 +990,13 @@ class RaindownPlugin extends Plugin {
       }
     });
     this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
-      if (info.file) this.scheduleWriteBack(info.file, typingDelay(editor));
+      if (info.file && !this.inFixedCell(editor)) this.scheduleWriteBack(info.file, typingDelay(editor));
     }));
-    this.registerEvent(this.app.vault.on('modify', (file) => this.scheduleWriteBack(file)));
+    // Obsidian's saves of what's typed in a fixed column aren't written back, as typing there isn't.
+    this.registerEvent(this.app.vault.on('modify', (file) => {
+      const editor = this.editorFor(file);
+      if (!editor || !this.inFixedCell(editor)) this.scheduleWriteBack(file);
+    }));
     // The line of each note's error, for the editor to underline.
     this.errors = new Map();
     this.registerEditorExtension(highlighting(this));
@@ -1014,20 +1061,20 @@ class RaindownPlugin extends Plugin {
   }
 
   // One write-back of a note at a time, as each needs the table comments the last one wrote. Asked again meanwhile, it
-  // runs once more when it's done, with the note as it is by then.
+  // runs once more when it's done, with the note as it is by then, as it was last asked to, like forced by Enter.
   async writeBackInTurn(file, options = {}) {
     if (this.writing.has(file.path)) {
-      this.writing.set(file.path, true);
+      this.writing.set(file.path, options);
       return;
     }
 
-    this.writing.set(file.path, false);
+    this.writing.set(file.path, null);
     try {
       await this.writeBack(file, options);
     } finally {
       const again = this.writing.get(file.path);
       this.writing.delete(file.path);
-      if (again) this.writeBackInTurn(file);
+      if (again) this.writeBackInTurn(file, again);
     }
   }
 
@@ -1092,15 +1139,27 @@ class RaindownPlugin extends Plugin {
   }
 
   // Enter on a held directive's line writes back, rather than starting a new line, which would split the directive.
-  // Enter in a table's row. Collapsing a cell writes back twice: once for what was typed in it, then again, as Raindown
-  // only clips a cell typed into the next time it writes its table.
+  // Enter in a table's row writes back, saving the cell left to its table's file and clipping it, as typing in a fixed
+  // column doesn't, like a spreadsheet's cell is saved when it's done with.
   enterInTable(view, info) {
     const change = enteredCell(view.state.doc.toString(), view.state.selection.main.head, { bare: this.settings.bareSyntax });
     if (!change) return false;
 
     view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, selection: { anchor: change.cursor }, userEvent: 'input' });
-    if (change.collapsed && info?.file) this.writeBackInTurn(info.file).then(() => this.writeBackInTurn(info.file, { force: true }));
+    if (info?.file) this.writeBackInTurn(info.file, { force: true });
     return true;
+  }
+
+  // Saving writes back too, saving a fixed column's cell just typed into, then leaves Obsidian to save.
+  writeBackOnSave(info) {
+    if (info?.file) this.writeBackInTurn(info.file, { force: true });
+    return false;
+  }
+
+  // Whether the cursor's in a table: block's fixed column, where typing isn't written back, as Raindown would clip what's
+  // being typed, until Enter or saving.
+  inFixedCell(editor) {
+    return inFixedCell(editor.getValue(), editor.getCursor(), { bare: this.settings.bareSyntax });
   }
 
   confirmHeld(info) {
@@ -1378,6 +1437,6 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
-  carriedOnCell, enteredCell, onExpandedRow, tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
+  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });

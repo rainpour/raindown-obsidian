@@ -587,22 +587,24 @@ test("updates a note's table comments when it's changed since, leaving its other
   assert.deepEqual(RaindownPlugin.tableCommentChanges(comment('aaa111'), `${comment('bbb222')}\n${comment('ccc333')}`), []);
 });
 
-test('writes a note back one at a time, once more if asked to meanwhile', async () => {
+test('writes a note back one at a time, once more if asked to meanwhile, as it was last asked to', async () => {
   const finished = [];
+  const asked = [];
   const note = {
     writing: new Map(),
     writeBackInTurn: RaindownPlugin.prototype.writeBackInTurn,
-    writeBack() { return new Promise((resolve) => finished.push(resolve)); }
+    writeBack(file, options) { asked.push(options); return new Promise((resolve) => finished.push(resolve)); }
   };
 
   note.writeBackInTurn({ path: 'a.md' });
   note.writeBackInTurn({ path: 'a.md' });
-  note.writeBackInTurn({ path: 'a.md' });
+  note.writeBackInTurn({ path: 'a.md' }, { force: true });
   assert.equal(finished.length, 1);
 
   finished[0]();
   await new Promise(setImmediate);
   assert.equal(finished.length, 2);
+  assert.deepEqual(asked, [{}, { force: true }]);
 
   finished[1]();
   await new Promise(setImmediate);
@@ -711,13 +713,13 @@ test('carries a cell on onto a + row on Option or Alt and Enter, with what is af
 function entered(note, at, options = { bare: true }) {
   const change = RaindownPlugin.enteredCell(note, at, options);
   const changed = note.slice(0, change.from) + change.insert + note.slice(change.to);
-  return { changed, after: changed.slice(change.cursor).split('\n')[0], collapsed: change.collapsed };
+  return { changed, after: changed.slice(change.cursor).split('\n')[0], toggle: change.toggle };
 }
 
 test('moves to the end of the same cell in the row below on Enter, like a spreadsheet, or stays in the last row', () => {
   const note = '| task | notes |\n| --- | ===== |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
 
-  assert.deepEqual(entered(note, note.indexOf('Tag') + 1), { changed: note, after: ' |', collapsed: false });
+  assert.deepEqual(entered(note, note.indexOf('Tag') + 1), { changed: note, after: ' |', toggle: null });
   assert.equal(entered(note, note.indexOf('task') + 1).after, ' | Tag |');
   assert.equal(entered(note, note.indexOf('Done')).after, ' |');
   assert.equal(RaindownPlugin.enteredCell(note, note.indexOf('---'), {}), null);
@@ -727,10 +729,18 @@ test("collapses a table: block's expanded cell on Enter, joining its + rows back
   const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
 
   assert.deepEqual(entered(note, note.indexOf('build')), {
-    changed: note.replace('| Release | Tag the |\n+ | build |', '| Release | Tag the build |'), after: ' |', collapsed: true
+    changed: note.replace('| Release | Tag the |\n+ | build |', '| Release | Tag the build |'), after: ' |', toggle: 'collapse'
   });
-  assert.equal(RaindownPlugin.onExpandedRow(note, note.indexOf('build'), { bare: true }), true);
-  assert.equal(RaindownPlugin.onExpandedRow(note, note.indexOf('Done'), { bare: true }), false);
+  assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('build'), { bare: true }), 'collapse');
+  assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('Done'), { bare: true }), null);
+});
+
+test("expands a table: block's cell cut to fit on Enter, deleting its ellipsis, and stays in it", () => {
+  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag… |\n| Docs | Done |\n";
+
+  assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('Tag'), { bare: true }), 'expand');
+  assert.deepEqual(entered(note, note.indexOf('Tag')), { changed: note.replace('Tag…', 'Tag'), after: ' |', toggle: 'expand' });
+  assert.equal(RaindownPlugin.cellToggleAt(note.replace("table: 'tasks.csv'\n", ''), note.indexOf('Tag') - 19, { bare: true }), null);
 });
 
 test("keeps the cursor in its cell when another cell in the row is clipped", () => {
@@ -738,4 +748,19 @@ test("keeps the cursor in its cell when another cell in the row is clipped", () 
   const after = '| Milk made with bea… | 54   |';
 
   assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: before.indexOf('54') + 2 }, before, after), { line: 0, ch: after.indexOf('54') + 2 });
+});
+
+test('keeps the cursor after the last letter of a cell clipped as it was typed into, not its padding', () => {
+  const before = '| Milk made with beautiful cows | 54   |';
+  const after = '| Milk made with be… | 54   |';
+
+  assert.deepEqual(RaindownPlugin.movedCursor({ line: 0, ch: before.indexOf('cows') + 4 }, before, after), { line: 0, ch: after.indexOf('…') + 1 });
+});
+
+test("knows when the cursor's in a table: block's fixed column, where typing isn't written back", () => {
+  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+  const at = (line, ch, text = note) => RaindownPlugin.inFixedCell(text, { line, ch }, { bare: true });
+
+  assert.deepEqual([at(4, 13), at(5, 5), at(6, 10), at(2, 10)], [true, true, true, true]);
+  assert.deepEqual([at(6, 3), at(2, 3), at(6, 10, note.replace("table: 'tasks.csv'\n", 'Plain\n'))], [false, false, false]);
 });
