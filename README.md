@@ -4,19 +4,25 @@ A [Markdown superset](https://raindown.dev/) where data stays current and comple
 
 ## Features
 
+- **Portable** - Everyone sees the same thing with or without Raindown/Obsidian, on mobile, desktop and web
+- **Endpoints** - Make requests to APIs and document their responses
+- **Nodes** - [table](https://raindown.dev/docs/table), [toc](https://raindown.dev/docs/toc), [chart](https://raindown.dev/docs/chart), [list](https://raindown.dev/docs/list), [schema](https://raindown.dev/docs/schema)
+- **Components** - Create your own custom business logic and output
+- **Multi-modal** - 3 input modes and 2 output modes per component
+- **Multi-domain** - Terminal UI, VS Code, Obsidian, static site generation
+- **Templating** - Advanced templating layer built on the same syntax
+
+There's a lot to Raindown but below are some of the features:
+
 ### Table
 
 <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table.gif" />
 
-[`table:`](https://raindown.dev/docs/table) writes a CSV or TSV file in your vault into the note as a table. Edit a cell and it's written back to the file. Changing the file itself updates the table.
-````md
-table: 'data/books.csv'
-<!-- table 2 rows · f690ac -->
-| title    | rating |
-| -------- | ------ |
-| Dune     | 5      |
-| Hyperion | 4      |
-````
+[`table:`](https://raindown.dev/docs/table) Two-way data sync with CSVs. If the CSV doesn't exist it creates it.
+
+- Totals and inline `=sum()` calculations
+- Fixed-width columns with text clipping
+- Multi-line cells on `Enter`
 
 ### Table of contents
 
@@ -60,7 +66,7 @@ order: 1
 [`list:`](https://raindown.dev/docs/list) writes a link to each note with a tag or in a folder, like `list: tags: 'book'`
 
 ````md
-list: tags: 'book'
+list: tags: book
 - [Dune](books/Dune.md)
 - [Hyperion](books/Hyperion.md)
 ````
@@ -70,11 +76,11 @@ list: tags: 'book'
 [`chart:`](https://raindown.dev/docs/chart) draws a CSV, TSV, JSON or YAML file in your vault.
 
 ````md
-chart: 'data/reading.csv'
+chart: data/reading.csv
 ```
-Jan  ███████████████████████▊                 320
-Feb  ████████████████████████████████████████ 540
-Mar  ██████████████████████████████▍          410
+Jan  ██████████████                 320
+Feb  ██████████████████████████████ 540
+Mar  █████████████████████          410
 ```
 ````
 
