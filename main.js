@@ -398,13 +398,13 @@ function onDirectiveLine(text, { line }, options) {
 // From each directive's name to the end of its line, like toc: or table: data/books.csv, total: true, so the editor
 // doesn't spell check its names, props and paths, while the Markdown it writes below is checked like any other.
 // The row of a table the cursor's in, with the |+ rows carrying it on: the lines it spans, the column the cursor's in,
-// the line its table starts on, whether it's the header, and the line of the row below it, or null outside a table's
-// rows.
+// the line its table starts on, whether it's the header or the delimiter row below it, and the line of the row below
+// it, or null outside a table's rows.
 function tableRowAt(lines, { line, ch }) {
   const row = (number) => /^\s*[|+]/.test(lines[number] ?? '') && lines[number].trim();
   let start = line;
   while (start > 0 && row(start - 1)) start--;
-  if (!row(line) || line === start + 1 || !isTableStart(lines, start)) return null;
+  if (!row(line) || !isTableStart(lines, start)) return null;
 
   const lead = lines[line].search(/[|+]/);
   if (ch <= lead) return null;
@@ -415,7 +415,7 @@ function tableRowAt(lines, { line, ch }) {
   const header = line === start;
   const below = header ? start + 2 : last + 1;
   const column = [...lines[line].slice(lead + 1, ch).matchAll(/(?<!\\)\|/g)].length;
-  return { start, first, last, column, header, next: row(below) ? below : null };
+  return { start, first, last, column, header, delimiter: line === start + 1, next: row(below) ? below : null };
 }
 
 // Whether the table starting on the line is a table: block's, below its directive and its comment.
@@ -441,7 +441,7 @@ function cellToggle(text, lines, row, options) {
 function inFixedCell(text, cursor, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, cursor);
-  if (!row || !fixedColumn(tableCells(lines[row.start + 1])[row.column] ?? '')) return false;
+  if (!row || row.delimiter || !fixedColumn(tableCells(lines[row.start + 1])[row.column] ?? '')) return false;
 
   return underTableDirective(text, lines, row.start, options);
 }
@@ -547,12 +547,12 @@ function tabbedCell(text, offset, { back = false } = {}) {
 
 // The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a |+ row below the
 // cursor's row carrying the cell on, with what's after the cursor in it, rather than splitting the row, which would
-// end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header.
+// end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header or delimiter row.
 function carriedOnCell(text, offset) {
   const lines = text.split('\n');
   const { line, ch } = positionOf(text, offset);
   const row = tableRowAt(lines, { line, ch });
-  if (!row || row.header) return null;
+  if (!row || row.header || row.delimiter) return null;
 
   const { column } = row;
   const current = lines[line];
@@ -801,6 +801,38 @@ function tableAlignmentChanges(text, { anchor, head }) {
   const moved = (offset) => offsetOf(aligned, movedCursor(positionOf(text, offset), text, aligned));
 
   return { changes: lines ?? [{ from, to, insert }], selection: { anchor: moved(anchor), head: moved(head) } };
+}
+
+// The |+ lines carrying on the table rows a deletion removes the whole of, each with its line break, so they go with
+// their row rather than being left below the row above, which Raindown would read them as carrying on. As ranges in the
+// text before the deletion, which is ranges too.
+function orphanedRows(text, deletions) {
+  const lines = text.split('\n');
+  const starts = [0];
+  lines.forEach((line) => starts.push(starts.at(-1) + line.length + 1));
+  const removed = (number) => deletions.some(({ from, to }) => from <= starts[number] && starts[number] + lines[number].length <= to);
+
+  return lines.flatMap((line, number) => {
+    if (!line.trim() || !removed(number) || !/^[ \t]*\|/.test(line) || CONTINUATION.test(line)) return [];
+
+    let last = number;
+    while (CONTINUATION.test(lines[last + 1] ?? '')) last++;
+    const rows = Array.from({ length: last - number }, (_, index) => number + 1 + index).filter((row) => !removed(row));
+    return rows.map((row) => ({ from: starts[row], to: Math.min(starts[row + 1], text.length) }));
+  });
+}
+
+// The editor extension deleting a table row's |+ lines with it, when its line's deleted, cut or selected and deleted.
+function rowDeletions() {
+  const { EditorState } = require('@codemirror/state');
+  return EditorState.transactionFilter.of((transaction) => {
+    if (!transaction.docChanged || !(transaction.isUserEvent('delete') || transaction.isUserEvent('cut'))) return transaction;
+
+    const deletions = [];
+    transaction.changes.iterChanges((from, to) => { if (to > from) deletions.push({ from, to }); });
+    const orphans = orphanedRows(transaction.startState.doc.toString(), deletions);
+    return orphans.length ? [transaction, { changes: orphans }] : transaction;
+  });
 }
 
 // The editor extension lining up a table in the same change as each key typed in it, so it's never out of line while
@@ -1068,6 +1100,7 @@ class RaindownPlugin extends Plugin {
     this.registerEditorExtension(highlighting(this));
     this.registerEditorExtension(heldWriteBacks(this));
     this.registerEditorExtension(tableAlignment(this));
+    this.registerEditorExtension(rowDeletions());
     this.registerEditorSuggest(new DirectiveSuggest(this.app, this));
     this.registerMarkdownPostProcessor((el, context) => this.renderSection(el, context));
     // Obsidian adds every file as it loads, so lists are only written back for notes added after that.
@@ -1513,6 +1546,6 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
-  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tabbedCell, tableAlignment, tableAlignmentChanges, blockCommentChanges, tableLines,
+  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, orphanedRows, rowDeletions, tabbedCell, tableAlignment, tableAlignmentChanges, blockCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });

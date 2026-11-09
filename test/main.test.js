@@ -818,3 +818,32 @@ test("expands and collapses each cell of a table: block's row on its own, on Ent
   assert.equal(entered(both, both.indexOf('Milk')).changed, both.replace('| Milk | Tag the |\n|+made | build |', '| Milk made | Tag the |\n|+ | build |'));
   assert.equal(entered(both, both.indexOf('build')).changed, both.replace('| Milk | Tag the |\n|+made | build |', '| Milk | Tag the build |\n|+made |  |'));
 });
+
+test("deletes a table row's |+ lines with it when its line's deleted, and nothing else", () => {
+  const note = '| task | notes |\n| --- | ===== |\n| Milk | Tag the |\n|+made | build |\n|+with | it |\n| Docs | Done |\n';
+  const row = note.indexOf('| Milk');
+  const line = { from: row, to: note.indexOf('|+made') };
+  const removed = (deletions) => RaindownPlugin.orphanedRows(note, deletions).reduceRight((text, { from, to }) => text.slice(0, from) + text.slice(to), note);
+  const deleted = (deletions) => deletions.reduceRight((text, { from, to }) => text.slice(0, from) + text.slice(to), removed(deletions));
+
+  assert.equal(deleted([line]), '| task | notes |\n| --- | ===== |\n| Docs | Done |\n');
+  assert.deepEqual(RaindownPlugin.orphanedRows(note, [{ from: note.indexOf('|+made'), to: note.indexOf('|+with') }]), []);
+  assert.deepEqual(RaindownPlugin.orphanedRows(note, [{ from: row + 2, to: row + 6 }]), []);
+  assert.deepEqual(RaindownPlugin.orphanedRows(note, [{ from: note.indexOf('| Docs'), to: note.length }]), []);
+});
+
+test('deletes the |+ lines in the same change as deleting their row, and leaves other changes alone', () => {
+  const note = '| task | notes |\n| --- | ===== |\n| Milk | Tag the |\n|+made | build |\n';
+  const from = note.indexOf('| Milk');
+  const transaction = (userEvent) => ({
+    docChanged: true,
+    isUserEvent: (event) => userEvent === event || userEvent.startsWith(`${event}.`),
+    startState: { doc: { toString: () => note } },
+    changes: { iterChanges: (each) => each(from, note.indexOf('|+made'), from, from, '') }
+  });
+
+  const deleted = transaction('delete.line');
+  assert.deepEqual(RaindownPlugin.rowDeletions()(deleted), [deleted, { changes: [{ from: note.indexOf('|+made'), to: note.length }] }]);
+  const typed = transaction('input.type');
+  assert.equal(RaindownPlugin.rowDeletions()(typed), typed);
+});
