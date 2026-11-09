@@ -17,6 +17,8 @@
 .raindown-setting-warning { margin-top: 1em; }
 /* The hint beside a directive whose write-back waits for the cursor to leave its line, or Enter. */
 .cm-raindown-hint { margin-left: 0.75em; padding: 0 0.4em; border-radius: var(--radius-s); background: var(--interactive-accent); color: var(--text-on-accent); font-family: var(--font-interface); font-size: var(--font-ui-smaller); }
-/* Raindown pads a table's columns to line up, which only shows in a monospace font. */
+/* Raindown pads a table's columns to line up, which only shows in a monospace font, on lines that don't wrap, so a
+   wide table scrolls sideways rather than wrapping its rows. */
 .markdown-source-view.mod-cm6 .cm-raindown-table,
 .markdown-source-view.mod-cm6 .cm-raindown-table * { font-family: var(--font-monospace); }
+.markdown-source-view.mod-cm6 .cm-raindown-table { white-space: pre; }
