@@ -577,7 +577,7 @@ test('keeps the cursor after the same text as a table is lined up again', () => 
 });
 
 test("updates a note's table comments when it's changed since, leaving its other lines alone", async () => {
-  const comment = (hash) => `<!-- table 1 row · ${hash} -->`;
+  const comment = (hash) => `<!-- 1 row · ${hash} -->`;
   const editor = fakeEditor(`${comment('aaa111')}\n| typed more |`);
   const note = { editorFor: () => editor };
 
@@ -726,7 +726,7 @@ test('moves to the end of the same cell in the row below on Enter, like a spread
 });
 
 test("collapses a table: block's expanded cell on Enter, joining its + rows back into its row", () => {
-  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
 
   assert.deepEqual(entered(note, note.indexOf('build')), {
     changed: note.replace('| Release | Tag the |\n+ | build |', '| Release | Tag the build |'), after: ' |', toggle: 'collapse'
@@ -736,7 +736,7 @@ test("collapses a table: block's expanded cell on Enter, joining its + rows back
 });
 
 test("expands a table: block's cell cut to fit on Enter, deleting its ellipsis, and stays in it", () => {
-  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag… |\n| Docs | Done |\n";
+  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag… |\n| Docs | Done |\n";
 
   assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('Tag'), { bare: true }), 'expand');
   assert.deepEqual(entered(note, note.indexOf('Tag')), { changed: note.replace('Tag…', 'Tag'), after: ' |', toggle: 'expand' });
@@ -758,9 +758,14 @@ test('keeps the cursor after the last letter of a cell clipped as it was typed i
 });
 
 test("knows when the cursor's in a table: block's fixed column, where typing isn't written back", () => {
-  const note = "table: 'tasks.csv'\n<!-- table 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
+  const note = "table: 'tasks.csv'\n<!-- 2 rows · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n| Docs | Done |\n";
   const at = (line, ch, text = note) => RaindownPlugin.inFixedCell(text, { line, ch }, { bare: true });
 
   assert.deepEqual([at(4, 13), at(5, 5), at(6, 10), at(2, 10)], [true, true, true, true]);
   assert.deepEqual([at(6, 3), at(2, 3), at(6, 10, note.replace("table: 'tasks.csv'\n", 'Plain\n'))], [false, false, false]);
+});
+
+test('makes a column fixed at its width when an equals sign is typed into its delimiter, and widen when a dash is', () => {
+  assert.equal(RaindownPlugin.alignTables('| a | notes |\n|-|:=----|\n| x | ok |\n').split('\n')[1], '| --- | :==== |');
+  assert.equal(RaindownPlugin.alignTables('| a | notes |\n|-|:==-==|\n| x | a longer note |\n').split('\n')[1], '| --- | :------------ |');
 });

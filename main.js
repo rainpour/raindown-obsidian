@@ -15,7 +15,8 @@ const DEFAULT_SETTINGS = { command: 'raindown', writeBack: true, bareSyntax: fal
 // =sum(c) is already whole on the way to =sum(cost), with Obsidian closing its bracket.
 const TYPING_DELAY = 0;
 const DELAY = 1000;
-const TABLE_COMMENT = /^<!-- table (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
+// A table: block's comment, like <!-- 2 rows · 3f2a9c -->.
+const TABLE_COMMENT = /^<!-- (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
 // How long a new server has to start and give its first answer, as a new standalone binary unpacks itself first, and a
@@ -437,7 +438,7 @@ function cellToggle(text, lines, row, options) {
 function inFixedCell(text, cursor, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, cursor);
-  if (!row || !tableCells(lines[row.start + 1])[row.column]?.includes('=')) return false;
+  if (!row || !fixedColumn(tableCells(lines[row.start + 1])[row.column] ?? '')) return false;
 
   return underTableDirective(text, lines, row.start, options);
 }
@@ -653,9 +654,18 @@ function isTableStart(lines, index) {
 
 // A column, like Raindown's TableColumn: its alignment, from its delimiter cell's colons, and its width, that of its
 // widest cell, or as wide as its delimiter when that's equals signs, which is fixed, letting a longer cell run past.
+// Whether a column's delimiter cell makes it fixed, like Raindown's TableColumn: equals signs, or one typed into dashes,
+// as fewer of them than dashes, while a dash typed into equals signs makes it widen again.
+function fixedColumn(delimiter) {
+  const [equals, dashes] = ['=', '-'].map((sign) => delimiter.split(sign).length - 1);
+  return equals > 0 && (dashes === 0 || equals < dashes);
+}
+
 function tableColumn(delimiter, cells) {
-  const fixed = delimiter.includes('=');
-  const width = fixed ? delimiter.length : Math.max(3, ...cells.map(displayWidth));
+  const fixed = fixedColumn(delimiter);
+  // An equals sign typed into dashes isn't part of its width, so it's fixed as wide as it was.
+  const typed = delimiter.includes('-') ? delimiter.split('=').length - 1 : 0;
+  const width = fixed ? delimiter.length - typed : Math.max(3, ...cells.map(displayWidth));
   const dash = fixed ? '=' : '-';
   let alignment = null;
   if (delimiter.startsWith(':') && delimiter.endsWith(':')) alignment = 'center';
