@@ -12,8 +12,6 @@ A [Markdown superset](https://raindown.dev/) where data stays current and comple
 - **Multi-domain** - Terminal UI, VS Code, Obsidian, static site generation
 - **Templating** - Advanced templating layer built on the same syntax
 
-There's a lot to Raindown but below are some of the features:
-
 ### Table
 
 <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table-formulas.gif" /> <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table-columns.gif" />
