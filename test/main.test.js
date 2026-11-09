@@ -807,3 +807,14 @@ test("collapses a table: block's expanded cell in its last row on Enter, then ad
 
   assert.equal(entered(note, note.indexOf('build')).changed, note.replace('| Release | Tag the |\n|+ | build |\n', '| Release | Tag the build |\n|  |  |\n'));
 });
+
+test("expands and collapses each cell of a table: block's row on its own, on Enter", () => {
+  const note = "table: 'tasks.csv'\n<!-- 1 row · 1a2b3c -->\n| task | notes |\n| ==== | ===== |\n| Milk… | Tag the |\n|+ | build |\n| Docs | Done |\n";
+  const both = "table: 'tasks.csv'\n<!-- 1 row · 1a2b3c -->\n| task | notes |\n| ==== | ===== |\n| Milk | Tag the |\n|+made | build |\n| Docs | Done |\n";
+
+  assert.equal(RaindownPlugin.cellToggleAt(note, note.indexOf('Milk'), { bare: true }), 'expand');
+  assert.equal(entered(note, note.indexOf('Milk')).changed, note.replace('Milk…', 'Milk'));
+  assert.equal(RaindownPlugin.cellToggleAt(both, both.indexOf('Milk'), { bare: true }), 'collapse');
+  assert.equal(entered(both, both.indexOf('Milk')).changed, both.replace('| Milk | Tag the |\n|+made | build |', '| Milk made | Tag the |\n|+ | build |'));
+  assert.equal(entered(both, both.indexOf('build')).changed, both.replace('| Milk | Tag the |\n|+made | build |', '| Milk | Tag the build |\n|+made |  |'));
+});

@@ -425,12 +425,14 @@ function underTableDirective(text, lines, start, options) {
   return tableFiles(text, options).some(({ at }) => at === directiveEnd);
 }
 
-// What Enter does to the cell the cursor's in, in a table: block's table: 'collapse' a cell shown in full on |+ rows, or
-// 'expand' one cut to fit, ending in an ellipsis, deleting it so Raindown shows its full text. Elsewhere it's null, and
-// Enter only moves to the row below.
+// What Enter does to the cell the cursor's in, in a table: block's table, each cell of a row on its own: 'collapse' one
+// shown in full on |+ rows, or 'expand' one cut to fit, ending in an ellipsis, deleting it so Raindown shows its full
+// text. Elsewhere it's null, and Enter only moves to the row below.
 function cellToggle(text, lines, row, options) {
   if (!underTableDirective(text, lines, row.start, options)) return null;
-  if (row.last > row.first) return 'collapse';
+
+  const below = lines.slice(row.first + 1, row.last + 1).map(tableCells);
+  if (below.some((cells) => cells[row.column])) return 'collapse';
   if (tableCells(lines[row.first])[row.column]?.endsWith('…')) return 'expand';
   return null;
 }
@@ -476,17 +478,21 @@ function emptyRow(lines, row) {
   return `${lines[row.first].match(/^[ \t]*/)[0]}| ${cells.join(' | ')} |`;
 }
 
-// A row and its |+ rows as one line, each cell's parts joined with spaces.
-function joinedRow(rows) {
+// A row and its |+ rows with one column's cell joined back onto the row's line, its parts joined with spaces, leaving
+// the other columns' cells as they are, and the |+ rows nothing's left on out.
+function collapsedColumn(rows, column) {
   const cells = rows.map(tableCells);
-  const joined = cells[0].map((_, column) => cells.map((row) => row[column] ?? '').filter(Boolean).join(' '));
-  return `${rows[0].match(/^[ \t]*/)[0]}| ${joined.join(' | ')} |`;
+  const indent = rows[0].match(/^[ \t]*/)[0];
+  const joined = cells.map((row) => row[column] ?? '').filter(Boolean).join(' ');
+  const first = cells[0].map((cell, index) => (index === column ? joined : cell));
+  const below = cells.slice(1).map((row) => row.map((cell, index) => (index === column ? '' : cell))).filter((row) => row.some(Boolean));
+  return [`${indent}| ${first.join(' | ')} |`, ...below.map((row) => `${indent}|+${row.join(' | ')} |`)];
 }
 
 // The change Enter makes in a table's row, like in a spreadsheet: done with the cell, moving the cursor to the end of the
 // same cell in the row below, which is added in the last row. In a table: block's table, it expands a cell cut to fit,
-// staying in it, and collapses one shown in full, joining its |+ rows back into its row first, so Raindown clips it
-// again. As offsets, with what it toggled, or null outside a table's rows.
+// staying in it, and collapses one shown in full, joining its text on the |+ rows back onto its row first, so Raindown
+// clips it again. As offsets, with what it toggled, or null outside a table's rows.
 function enteredCell(text, offset, options) {
   const lines = text.split('\n');
   const row = tableRowAt(lines, positionOf(text, offset));
@@ -496,7 +502,7 @@ function enteredCell(text, offset, options) {
   if (toggle === 'expand') return expandedCell(text, lines, row);
 
   const rows = lines.slice(row.first, row.last + 1);
-  const kept = toggle === 'collapse' ? [joinedRow(rows)] : rows;
+  const kept = toggle === 'collapse' ? collapsedColumn(rows, row.column) : rows;
   // In the last row, a row's added below it to move to, like a spreadsheet's next row.
   const added = row.next === null && !row.header ? [emptyRow(lines, row)] : [];
   const insert = [...kept, ...added].join('\n');
