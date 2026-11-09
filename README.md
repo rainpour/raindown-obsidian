@@ -16,13 +16,9 @@ There's a lot to Raindown but below are some of the features:
 
 ### Table
 
-<img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table.gif" />
+<img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table-formulas.gif" /> <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/table-columns.gif" />
 
 [`table:`](https://raindown.dev/docs/table) Two-way data sync with CSVs. If the CSV doesn't exist it creates it.
-
-- Totals and inline `=sum()` calculations
-- Fixed-width columns with text clipping
-- Multi-line cells on `Enter`
 
 ### Table of contents
 
