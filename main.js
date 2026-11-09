@@ -23,9 +23,9 @@ const ENDPOINT_TIMEOUT = 60000;
 // How long a new server has to start and give its first answer, as a new standalone binary unpacks itself first, and a
 // note in a big vault, or one in cloud storage, can take a while to list.
 const START_TIMEOUT = 60000;
-// The oldest Raindown that works with the plugin, as earlier ones read notes as ASCII when Obsidian's opened from the
-// Dock, and stop on the first accented letter.
-const MINIMUM_VERSION = '0.15.0';
+// The oldest Raindown that works with the plugin, as earlier ones write a table: block's comment starting with "table",
+// and don't know fixed-width columns or |+ rows.
+const MINIMUM_VERSION = '0.18.0';
 // Shown below the Bare syntax setting, as a bare directive writes over the lines below it, up to the next blank line.
 const BARE_SYNTAX_WARNING = 'Make sure your files are version controlled or backed up before enabling bare syntax, ' +
   'otherwise existing content beneath text like "list:" could be overwritten';
