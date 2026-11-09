@@ -623,9 +623,22 @@ function typingDelay(editor) {
   return TYPING_DELAY;
 }
 
-// The start of each line of a Markdown table, and its + rows, as Raindown's columns only line up in a monospace font.
+// The start of each line of a Markdown table, and its + rows, as Raindown's columns only line up in a monospace font,
+// with its header, to show in the accent colour, and its delimiter row, its pipes, and the + starting a row carrying
+// one on, to show faint.
 function tableLines(markdown) {
-  return [...markdown.matchAll(/^[ \t]*[|+].*\|[ \t]*$/gm)].map(({ index }) => ({ from: index, type: 'table' }));
+  const lines = markdown.split('\n');
+  let offset = 0;
+  return lines.flatMap((line, number) => {
+    const from = offset;
+    offset += line.length + 1;
+    if (!/^[ \t]*[|+].*\|[ \t]*$/.test(line)) return [];
+
+    const header = isTableStart(lines, number) ? [{ from, to: from + line.length, type: 'table-header' }] : [];
+    const delimiter = number > 0 && isTableStart(lines, number - 1) ? [{ from, to: from + line.length, type: 'table-delimiter' }] : [];
+    const pipes = [...line.matchAll(/(?<!\\)\||(?<=^[ \t]*)\+/g)].map(({ index }) => ({ from: from + index, to: from + index + 1, type: 'table-pipe' }));
+    return [{ from, type: 'table' }, ...header, ...delimiter, ...pipes];
+  });
 }
 
 // Lining up tables as they're typed, the same as Raindown's TableFormatter, so its write-back finds them lined up.

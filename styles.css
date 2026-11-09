@@ -22,3 +22,7 @@
 .markdown-source-view.mod-cm6 .cm-raindown-table,
 .markdown-source-view.mod-cm6 .cm-raindown-table * { font-family: var(--font-monospace); }
 .markdown-source-view.mod-cm6 .cm-raindown-table { white-space: pre; }
+/* A table's header in bold, its delimiter row muted, and its pipes faint, so its cells stand out. */
+.markdown-source-view.mod-cm6 .cm-raindown-table-header { font-weight: var(--font-bold); }
+.markdown-source-view.mod-cm6 .cm-raindown-table-delimiter { color: var(--text-muted); }
+.markdown-source-view.mod-cm6 .cm-raindown-table-pipe { color: var(--text-faint); font-weight: var(--font-normal); }

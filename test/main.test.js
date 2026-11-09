@@ -553,10 +553,15 @@ test("underlines the line of a directive Raindown couldn't run, while writing ba
   assert.equal(raindown.errors.get('note.md'), 1);
 });
 
-test('finds the start of each line of a table, and no others', () => {
+test('finds the start of each line of a table, and no others, with its header, delimiter row and pipes', () => {
   const text = 'A | B\n\n| a | b |\n| - | - |\n  | 1 | 2 |\n+ | 3 |\n\nnot | a table |\n';
 
-  assert.deepEqual(RaindownPlugin.tableLines(text).map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |', '+ | 3 |']);
+  const lines = RaindownPlugin.tableLines(text);
+
+  assert.deepEqual(lines.filter(({ type }) => type === 'table').map(({ from }) => text.slice(from).split('\n')[0]), ['| a | b |', '| - | - |', '  | 1 | 2 |', '+ | 3 |']);
+  assert.deepEqual(lines.filter(({ type }) => type === 'table-header').map(({ from, to }) => text.slice(from, to)), ['| a | b |']);
+  assert.deepEqual(lines.filter(({ type }) => type === 'table-delimiter').map(({ from, to }) => text.slice(from, to)), ['| - | - |']);
+  assert.deepEqual(lines.filter(({ type }) => type === 'table-pipe').map(({ from, to }) => text.slice(from, to)).join(''), '|||||||||+||');
 });
 
 test('changes each changed line on its own, last first, so a table lined up again keeps the cursor out of them', () => {
