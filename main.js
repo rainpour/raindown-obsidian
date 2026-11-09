@@ -470,6 +470,12 @@ function cellEndIn(line, column) {
   return cell.from + Math.max(1, line.slice(cell.from, cell.to).trimEnd().length);
 }
 
+// An empty row for the row's table, indented like it, which the table lines up.
+function emptyRow(lines, row) {
+  const cells = tableCells(lines[row.start + 1]).map(() => '');
+  return `${lines[row.first].match(/^[ \t]*/)[0]}| ${cells.join(' | ')} |`;
+}
+
 // A row and its + rows as one line, each cell's parts joined with spaces.
 function joinedRow(rows) {
   const cells = rows.map(tableCells);
@@ -478,7 +484,7 @@ function joinedRow(rows) {
 }
 
 // The change Enter makes in a table's row, like in a spreadsheet: done with the cell, moving the cursor to the end of the
-// same cell in the row below, or of its own in the last row. In a table: block's table, it expands a cell cut to fit,
+// same cell in the row below, which is added in the last row. In a table: block's table, it expands a cell cut to fit,
 // staying in it, and collapses one shown in full, joining its + rows back into its row first, so Raindown clips it
 // again. As offsets, with what it toggled, or null outside a table's rows.
 function enteredCell(text, offset, options) {
@@ -490,12 +496,14 @@ function enteredCell(text, offset, options) {
   if (toggle === 'expand') return expandedCell(text, lines, row);
 
   const rows = lines.slice(row.first, row.last + 1);
-  const collapsed = toggle === 'collapse';
-  const insert = collapsed ? joinedRow(rows) : rows.join('\n');
+  const kept = toggle === 'collapse' ? [joinedRow(rows)] : rows;
+  // In the last row, a row's added below it to move to, like a spreadsheet's next row.
+  const added = row.next === null && !row.header ? [emptyRow(lines, row)] : [];
+  const insert = [...kept, ...added].join('\n');
   const from = offsetOf(text, { line: row.first, ch: 0 });
   const to = offsetOf(text, { line: row.last, ch: lines[row.last].length });
   const after = text.slice(0, from) + insert + text.slice(to);
-  const target = row.next === null ? row.first : row.next - (collapsed ? rows.length - 1 : 0);
+  const target = row.next === null ? row.first + kept.length - 1 + added.length : row.next - (rows.length - kept.length);
   const cursor = offsetOf(after, { line: target, ch: cellEndIn(after.split('\n')[target], row.column) });
 
   return { from, to, insert, cursor, toggle };

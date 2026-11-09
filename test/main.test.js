@@ -721,12 +721,14 @@ function entered(note, at, options = { bare: true }) {
   return { changed, after: changed.slice(change.cursor).split('\n')[0], toggle: change.toggle };
 }
 
-test('moves to the end of the same cell in the row below on Enter, like a spreadsheet, or stays in the last row', () => {
+test('moves to the end of the same cell in the row below on Enter, like a spreadsheet, adding one below the last row', () => {
   const note = '| task | notes |\n| --- | ===== |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
 
   assert.deepEqual(entered(note, note.indexOf('Tag') + 1), { changed: note, after: ' |', toggle: null });
   assert.equal(entered(note, note.indexOf('task') + 1).after, ' | Tag |');
-  assert.equal(entered(note, note.indexOf('Done')).after, ' |');
+  const added = entered(note, note.indexOf('Done'));
+  assert.equal(added.changed, `${note}|  |  |\n`);
+  assert.equal(added.after, ' |');
   assert.equal(RaindownPlugin.enteredCell(note, note.indexOf('---'), {}), null);
 });
 
@@ -797,4 +799,10 @@ test('moves to the next cell on Tab, and back on Shift and Tab, across rows, sta
   assert.equal(tab('Done'), ' |');
   assert.equal(tab('task', { back: true }), ' | notes |');
   assert.equal(RaindownPlugin.tabbedCell('Not a table\n', 2), null);
+});
+
+test("collapses a table: block's expanded cell in its last row on Enter, then adds a row below it", () => {
+  const note = "table: 'tasks.csv'\n<!-- 1 row · 1a2b3c -->\n| task | notes |\n| --- | ===== |\n| Release | Tag the |\n+ | build |\n";
+
+  assert.equal(entered(note, note.indexOf('build')).changed, note.replace('| Release | Tag the |\n+ | build |\n', '| Release | Tag the build |\n|  |  |\n'));
 });
