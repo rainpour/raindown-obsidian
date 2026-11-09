@@ -5,10 +5,10 @@ A [Markdown superset](https://raindown.dev/) where data stays current and comple
 ## Features
 
 - **Portable** - Everyone sees the same thing with or without Raindown/Obsidian, on mobile, desktop and web
-- **Endpoints** - Make requests to APIs and document their responses
+- [**Endpoints**](https://raindown.dev/docs/endpoint) - Make HTTP requests to APIs and document their responses
 - **Nodes** - [table](https://raindown.dev/docs/table), [toc](https://raindown.dev/docs/toc), [chart](https://raindown.dev/docs/chart), [list](https://raindown.dev/docs/list), [schema](https://raindown.dev/docs/schema)
-- **Components** - Create your own custom business logic and output
-- **Multi-modal** - 3 input modes and 2 output modes per component
+- [**Components**](https://raindown.dev/docs/components) - Create your own custom business logic and output
+- **Multi-modal** - [3 input modes](https://raindown.dev/docs/directives) and 2 output modes per component
 - **Multi-domain** - Terminal UI, VS Code, Obsidian, static site generation
 - **Templating** - Advanced templating layer built on the same syntax
 
@@ -23,18 +23,6 @@ A [Markdown superset](https://raindown.dev/) where data stays current and comple
 <img src="https://raw.githubusercontent.com/rainpour/raindown-obsidian/main/assets/toc.gif" />
 
 [`toc:`](https://raindown.dev/docs/toc) writes an inline TOC which updates as you add and rename headings.
-
-````md
-# Books
-
-toc:
-- [Reading](#reading)
-- [Finished](#finished)
-
-## Reading
-
-## Finished
-````
 
 ### Metadata
 
@@ -80,7 +68,7 @@ Mar  █████████████████████          41
 
 ### Components
 
-A note in your vault's `.raindown` folder, like `BookCard.md`, is a [component](https://raindown.dev/docs/components#markdown) with no code, a template whose properties fill its `{variables}`, like `BookCard: title: Dune rating: 5`.
+A note in your vault's `.raindown` folder like `BookCard.md` is a [component](https://raindown.dev/docs/components#markdown). Components can be made with Ruby, JavaScript of Markdown, and referenced anywhere in your Markdown like `BookCard: title: Dune rating: 5`.
 
 ## Installation
 
