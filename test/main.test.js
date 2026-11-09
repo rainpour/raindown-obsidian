@@ -584,7 +584,7 @@ test("updates a note's table comments when it's changed since, leaving its other
   await RaindownPlugin.prototype.applyToNote.call(note, {}, `${comment('aaa111')}\n| typed |`, `${comment('bbb222')}\n| typed |`);
 
   assert.equal(editor.text, `${comment('bbb222')}\n| typed more |`);
-  assert.deepEqual(RaindownPlugin.tableCommentChanges(comment('aaa111'), `${comment('bbb222')}\n${comment('ccc333')}`), []);
+  assert.deepEqual(RaindownPlugin.blockCommentChanges(comment('aaa111'), `${comment('bbb222')}\n${comment('ccc333')}`), []);
 });
 
 test('writes a note back one at a time, once more if asked to meanwhile, as it was last asked to', async () => {
@@ -768,4 +768,11 @@ test("knows when the cursor's in a table: block's fixed column, where typing isn
 test('makes a column fixed at its width when an equals sign is typed into its delimiter, and widen when a dash is', () => {
   assert.equal(RaindownPlugin.alignTables('| a | notes |\n|-|:=----|\n| x | ok |\n').split('\n')[1], '| --- | :==== |');
   assert.equal(RaindownPlugin.alignTables('| a | notes |\n|-|:==-==|\n| x | a longer note |\n').split('\n')[1], '| --- | :------------ |');
+});
+
+test("takes any comment on its own line for a node's comment, but not a directive's tags", () => {
+  const before = '<!-- toc: -->\n<!-- 1 row · aaa111 -->\n<!-- :toc -->\n<!-- conflict · aaa111 -->';
+  const after = '<!-- toc: -->\n<!-- 2 rows · bbb222 -->\n<!-- :toc -->\n<!-- 2 rows · bbb222 -->';
+
+  assert.deepEqual(RaindownPlugin.blockCommentChanges(before, after).map(({ from }) => from.line), [3, 1]);
 });

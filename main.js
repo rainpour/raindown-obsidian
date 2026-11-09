@@ -15,8 +15,9 @@ const DEFAULT_SETTINGS = { command: 'raindown', writeBack: true, bareSyntax: fal
 // =sum(c) is already whole on the way to =sum(cost), with Obsidian closing its bracket.
 const TYPING_DELAY = 0;
 const DELAY = 1000;
-// A table: block's comment, like <!-- 2 rows · 3f2a9c -->.
-const TABLE_COMMENT = /^<!-- (?:conflict|\d+ rows?) · [0-9a-f]+ -->$/;
+// A comment on its own line that isn't a directive, which straight below a directive is its node's comment, like
+// table:'s <!-- 2 rows · 3f2a9c -->, as Raindown reads it.
+const BLOCK_COMMENT = /^\s*<!--(?!\s*(?::[A-Za-z]|[A-Za-z][\w-]*(?:::[A-Z]\w*)*:)).*-->\s*$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
 // How long a new server has to start and give its first answer, as a new standalone binary unpacks itself first, and a
@@ -89,10 +90,10 @@ function changedLines(before, after) {
   }).reverse();
 }
 
-// The changes to the note's table comments, last first, to those Raindown just wrote. It wrote their files too, so
-// when the note's changed since, its comments must still say so, or the next write-back reads as a conflict.
-function tableCommentChanges(current, markdown) {
-  const comments = (text) => text.split('\n').flatMap((line, number) => (TABLE_COMMENT.test(line) ? [{ line, number }] : []));
+// The changes to the note's comments, last first, to those Raindown just wrote, like table:'s. It wrote their files
+// too, so when the note's changed since, its comments must still say so, or the next write-back reads as a conflict.
+function blockCommentChanges(current, markdown) {
+  const comments = (text) => text.split('\n').flatMap((line, number) => (BLOCK_COMMENT.test(line) ? [{ line, number }] : []));
   const [oldComments, newComments] = [comments(current), comments(markdown)];
   if (oldComments.length !== newComments.length) return [];
 
@@ -419,7 +420,7 @@ function tableRowAt(lines, { line, ch }) {
 
 // Whether the table starting on the line is a table: block's, below its directive and its comment.
 function underTableDirective(text, lines, start, options) {
-  const above = TABLE_COMMENT.test(lines[start - 1] ?? '') ? start - 1 : start;
+  const above = BLOCK_COMMENT.test(lines[start - 1] ?? '') ? start - 1 : start;
   const directiveEnd = lines.slice(0, above).join('\n').length;
   return tableFiles(text, options).some(({ at }) => at === directiveEnd);
 }
@@ -1272,7 +1273,7 @@ class RaindownPlugin extends Plugin {
     if (!editor) return this.app.vault.process(file, (current) => applyRewrite(current, original, markdown));
     const current = editor.getValue();
     if (current !== original) {
-      const comments = tableCommentChanges(current, markdown);
+      const comments = blockCommentChanges(current, markdown);
       if (comments.length) changeOutsideHistory(editor, comments);
       return;
     }
@@ -1447,6 +1448,6 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
-  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tableAlignment, tableAlignmentChanges, tableCommentChanges, tableLines,
+  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tableAlignment, tableAlignmentChanges, blockCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });
