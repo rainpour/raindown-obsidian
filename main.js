@@ -509,6 +509,28 @@ function expandedCell(text, lines, row) {
   return { from: at, to: at + 1, insert: '', cursor: at, toggle: 'expand' };
 }
 
+// Where Tab moves the cursor in a table's row, like in a spreadsheet: to the end of the next cell's text on its line, or
+// the first of the row below, or with back, like Shift and Tab, the previous cell, or the last of the row above. It
+// stays put in the table's last cell, or first, so Tab never splits a row. Null outside a table's rows.
+function tabbedCell(text, offset, { back = false } = {}) {
+  const lines = text.split('\n');
+  const position = positionOf(text, offset);
+  const row = tableRowAt(lines, position);
+  if (!row) return null;
+
+  const { line } = position;
+  const columns = tableCells(lines[row.start + 1]).length;
+  const at = (number, column) => offsetOf(text, { line: number, ch: cellEndIn(lines[number], column) });
+  const column = row.column + (back ? -1 : 1);
+  if (column >= 0 && column < columns) return at(line, column);
+  if (!back) return row.next === null ? at(line, row.column) : at(row.next, 0);
+
+  let above = row.first - 1;
+  if (above === row.start + 1) above = row.start;
+  while (above > row.start + 2 && CONTINUATION.test(lines[above])) above--;
+  return above < row.start ? at(line, row.column) : at(above, columns - 1);
+}
+
 // The change Option or Alt and Enter makes in a table's cell, like a line break in a spreadsheet: a + row below the
 // cursor's row carrying the cell on, with what's after the cursor in it, rather than splitting the row, which would
 // end the table. As offsets, with where the cursor goes, or null outside a table's rows, or in its header.
@@ -905,6 +927,8 @@ function heldWriteBacks(plugin) {
     Prec.high(keymap.of([
       { key: 'Enter', run: (view) => plugin.confirmHeld(infoFor(view)) || plugin.enterInTable(view, infoFor(view)) },
       { key: 'Alt-Enter', run: carryOnCell },
+      { key: 'Tab', run: (view) => plugin.tabInTable(view, infoFor(view)) },
+      { key: 'Shift-Tab', run: (view) => plugin.tabInTable(view, infoFor(view), { back: true }) },
       { key: 'Mod-s', run: (view) => plugin.writeBackOnSave(infoFor(view)) }
     ]))
   ];
@@ -1158,6 +1182,16 @@ class RaindownPlugin extends Plugin {
 
     view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, selection: { anchor: change.cursor }, userEvent: 'input' });
     if (info?.file) this.writeBackInTurn(info.file, { force: true });
+    return true;
+  }
+
+  // Tab in a table's row moves to the next cell, or back, and writes back, saving the cell left, like Enter.
+  tabInTable(view, info, options) {
+    const cursor = tabbedCell(view.state.doc.toString(), view.state.selection.main.head, options);
+    if (cursor === null) return false;
+
+    view.dispatch({ selection: { anchor: cursor } });
+    if (info?.file) this.writeBackInTurn(info.file);
     return true;
   }
 
@@ -1448,6 +1482,6 @@ module.exports = RaindownPlugin;
 Object.assign(module.exports, {
   alignTables, applyRewrite, binaryPath, changedLines, changedRange, directiveTokens, errorLine, errorMessage, expandCommand,
   DirectiveSuggest, hasDirectives, inFormulaCell, installCommand, isOlder, markSection, movedCursor, rewriteArgs, sectionHtml,
-  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tableAlignment, tableAlignmentChanges, blockCommentChanges, tableLines,
+  carriedOnCell, cellToggleAt, enteredCell, inFixedCell, tabbedCell, tableAlignment, tableAlignmentChanges, blockCommentChanges, tableLines,
   RaindownServer, changeOutsideHistory, directiveLines, onDirectiveLine, runRaindown, shellRaindown, tableFiles
 });

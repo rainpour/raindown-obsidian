@@ -776,3 +776,20 @@ test("takes any comment on its own line for a node's comment, but not a directiv
 
   assert.deepEqual(RaindownPlugin.blockCommentChanges(before, after).map(({ from }) => from.line), [3, 1]);
 });
+
+test('moves to the next cell on Tab, and back on Shift and Tab, across rows, staying put at either end', () => {
+  const note = '| task | notes |\n| --- | ----- |\n| Release | Tag |\n+ | the build |\n| Docs | Done |\n';
+  // The text after the cursor on its line once Tab's moved it.
+  const tab = (from, options) => note.slice(RaindownPlugin.tabbedCell(note, note.indexOf(from), options)).split('\n')[0];
+
+  assert.equal(tab('task'), ' |');
+  assert.equal(tab('notes'), ' | Tag |');
+  assert.equal(tab('Tag'), ' | Done |');
+  assert.equal(tab('Tag', { back: true }), ' | Tag |');
+  assert.equal(tab('the build'), ' | Done |');
+  assert.equal(tab('Docs', { back: true }), ' |');
+  assert.equal(note.slice(0, RaindownPlugin.tabbedCell(note, note.indexOf('Release'), { back: true })).split('\n').at(-1), '| task | notes');
+  assert.equal(tab('Done'), ' |');
+  assert.equal(tab('task', { back: true }), ' | notes |');
+  assert.equal(RaindownPlugin.tabbedCell('Not a table\n', 2), null);
+});
