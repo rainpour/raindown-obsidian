@@ -89,6 +89,13 @@ test('only applies what Raindown wrote back to the note it was given', () => {
   assert.equal(RaindownPlugin.applyRewrite('a and more', 'a', 'b'), 'a and more');
 });
 
+test("finds a table's file in the vault without Node's path, which phones don't have", () => {
+  assert.equal(RaindownPlugin.vaultPath('', 'data.csv'), 'data.csv');
+  assert.equal(RaindownPlugin.vaultPath('notes', '../data/./a.csv'), 'data/a.csv');
+  assert.equal(RaindownPlugin.vaultPath('notes', '../../a.csv'), '../a.csv');
+  assert.equal(RaindownPlugin.vaultPath('notes/a', '..'), 'notes');
+});
+
 test('only starts Raindown for notes with directives', () => {
   assert.ok(RaindownPlugin.hasDirectives('# A\n\n<!-- toc: -->\n'));
   assert.ok(RaindownPlugin.hasDirectives('---\nraindown: true\n---\n'));

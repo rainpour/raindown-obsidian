@@ -89,7 +89,7 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | **Raindown: Write back this note**           | Writes back now, and says what happened                                                |
 | **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed                      |
-| **Raindown: Open this table's file**         | Opens the file of the table at the cursor, in your spreadsheet app                     |
+| **Raindown: Open this table's file**         | Opens the file of the table at the cursor, in your spreadsheet app, on desktop         |
 
 > [!NOTE]
 > The plugin doesn't run [endpoints](https://raindown.dev/docs/endpoint) or JavaScript components yet, or show `<{ }>` in reading view. The [CLI](https://raindown.dev/docs/cli) and VS Code extension do.

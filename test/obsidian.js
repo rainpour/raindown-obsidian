@@ -40,4 +40,6 @@ class Setting {}
 
 const editorInfoField = {};
 
-module.exports = { EditorSuggest, Notice, Plugin, PluginSettingTab, Setting, Vault, editorInfoField };
+const Platform = { isDesktopApp: true };
+
+module.exports = { EditorSuggest, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField };

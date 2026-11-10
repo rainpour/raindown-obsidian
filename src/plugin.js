@@ -3,8 +3,7 @@
 // Raindown for Obsidian: as a note's saved, Raindown writes back to it, like `raindown watch`, filling in its tables of
 // contents, file lists, components and charts. Raindown runs inside the plugin, in Ruby compiled to WebAssembly, which
 // src/engine.js starts. bin/build builds main.js, which Obsidian loads, from this folder.
-const path = require('path');
-const { EditorSuggest, Notice, Plugin, PluginSettingTab, Setting, Vault, editorInfoField } = require('obsidian');
+const { EditorSuggest, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField } = require('obsidian');
 const { RaindownEngine } = require('./engine');
 
 const DEFAULT_SETTINGS = { writeBack: true, bareSyntax: false };
@@ -29,6 +28,16 @@ const BUILT_INS = ['chart', 'endpoint', 'for', 'if', 'list', 'schema', 'table', 
 const DIRECTIVE = /<!--\s*[A-Za-z][\w:]*:|^raindown:\s*true\s*$/m;
 // With bare directives in every note, a line starting with a name and a colon, like toc:, might be one too.
 const BARE_DIRECTIVE = /^ {0,3}[A-Za-z]\w*:(?:\s|$)/m;
+
+// The path in the vault the parts make, like notes/../data.csv as data.csv, which starts with .. when it's outside it.
+// Obsidian's mobile apps don't have Node's path.
+function vaultPath(...parts) {
+  return parts.join('/').split('/').reduce((resolved, part) => {
+    if (part === '..' && resolved.length && resolved.at(-1) !== '..') resolved.pop();
+    else if (part && part !== '.') resolved.push(part);
+    return resolved;
+  }, []).join('/');
+}
 
 // Takes the plugin's settings, so Bare syntax counts.
 function hasDirectives(markdown, { bareSyntax = false } = {}) {
@@ -694,7 +703,7 @@ function highlighting(plugin) {
     toDOM(view) {
       const button = document.createElement('button');
       button.className = 'cm-raindown-open-file';
-      button.textContent = `Open ${path.extname(this.data).slice(1).toUpperCase()}`;
+      button.textContent = `Open ${this.data.split('.').at(-1).toUpperCase()}`;
       button.addEventListener('click', () => plugin.openTableFile(view.state.field(editorInfoField, false)?.file, this.data));
       return button;
     }
@@ -710,7 +719,8 @@ function highlighting(plugin) {
     const line = errorFor(view);
     const markdown = view.state.doc.toString();
     const options = { bare: plugin.settings.bareSyntax };
-    const buttons = tableFiles(markdown, options).map(({ at, data }) => ({
+    // Phones and tablets have no app to open a table's file with.
+    const buttons = !Platform.isDesktopApp ? [] : tableFiles(markdown, options).map(({ at, data }) => ({
       from: at, to: at, decoration: Decoration.widget({ widget: new OpenFileWidget(data), side: 1 })
     }));
     const tokens = directiveTokens(markdown, options);
@@ -862,7 +872,7 @@ class RaindownPlugin extends Plugin {
       id: 'open-table-file',
       name: "Open this table's file",
       editorCheckCallback: (checking, editor, view) => {
-        const table = this.tableAtCursor(editor);
+        const table = Platform.isDesktopApp && this.tableAtCursor(editor);
         if (table && !checking) this.openTableFile(view.file, table.data);
         return Boolean(table);
       }
@@ -1077,7 +1087,7 @@ class RaindownPlugin extends Plugin {
 
   // A project's own nodes, from the .raindown folder in the note's folder or the nearest one above it.
   async projectNodes(file) {
-    const nodes = path.posix.join(await this.projectRoot(file), '.raindown');
+    const nodes = vaultPath(await this.projectRoot(file), '.raindown');
     if (!await this.app.vault.adapter.exists(nodes)) return [];
 
     const { files } = await this.app.vault.adapter.list(nodes);
@@ -1086,9 +1096,8 @@ class RaindownPlugin extends Plugin {
 
   // The folder Raindown reads a note's files from, like a table's: the nearest with a .raindown folder, or the vault.
   async projectRoot(file) {
-    for (let folder = file?.parent?.path ?? ''; ; folder = path.posix.dirname(folder)) {
-      if (folder === '/' || folder === '.') folder = '';
-      if (await this.app.vault.adapter.exists(path.posix.join(folder, '.raindown'))) return folder;
+    for (let folder = vaultPath(file?.parent?.path ?? ''); ; folder = vaultPath(folder, '..')) {
+      if (await this.app.vault.adapter.exists(vaultPath(folder, '.raindown'))) return folder;
       if (folder === '') return '';
     }
   }
@@ -1096,12 +1105,10 @@ class RaindownPlugin extends Plugin {
   // Opens a table's file in the app the computer opens it with, like Numbers or Excel, as Obsidian doesn't open CSV
   // files. Editing it there changes the table in the note too.
   async openTableFile(file, data) {
-    const found = path.posix.normalize(path.posix.join(await this.projectRoot(file), data));
+    const found = vaultPath(await this.projectRoot(file), data);
     if (found.startsWith('..')) return new Notice(`${data} isn't in the vault`);
     if (!await this.app.vault.adapter.exists(found)) return new Notice(`${data} is made when the note's written back`);
-    if (this.app.openWithDefaultApp) return this.app.openWithDefaultApp(found);
-
-    return require('electron').shell.openPath(path.join(this.app.vault.adapter.getBasePath(), found));
+    return this.app.openWithDefaultApp(found);
   }
 
   // The table: directive at the cursor, or the nearest above it.
@@ -1183,5 +1190,5 @@ Object.assign(module.exports, {
   alignTables, applyRewrite, blockCommentChanges, carriedOnCell, cellToggleAt, changedLines, changedRange, changeOutsideHistory,
   directiveLines, DirectiveSuggest, directiveTokens, enteredCell, errorLine, hasDirectives, inFixedCell, inFormulaCell,
   movedCursor, onDirectiveLine, orphanedRows, rowDeletions, tabbedCell, tableAlignment, tableAlignmentChanges, tableFiles,
-  tableLines
+  tableLines, vaultPath
 });

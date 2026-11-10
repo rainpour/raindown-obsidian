@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Table headers are bold, delimiter rows muted and pipes faint
 - `|+` rows show in the accent colour
 - Tables don't wrap, so wide ones scroll sideways
+- Phones and tablets, as Raindown runs inside the plugin
 
 ### Changed
 
