@@ -3,7 +3,9 @@
 // Raindown for Obsidian: as a note's saved, Raindown writes back to it, like `raindown watch`, filling in its tables of
 // contents, file lists, components and charts. Raindown runs inside the plugin, in Ruby compiled to WebAssembly, which
 // src/engine.js starts. bin/build builds main.js, which Obsidian loads, from this folder.
-const { EditorSuggest, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField } = require('obsidian');
+const {
+  EditorSuggest, MarkdownRenderer, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField
+} = require('obsidian');
 const { RaindownEngine } = require('./engine');
 
 const DEFAULT_SETTINGS = { writeBack: true, bareSyntax: false };
@@ -16,6 +18,12 @@ const DELAY = 1000;
 // table:'s <!-- 2 rows · 3f2a9c -->, as Raindown reads it.
 const BLOCK_COMMENT = /^\s*<!--(?!\s*(?::[A-Za-z]|[A-Za-z][\w-]*(?:::[A-Z]\w*)*:)).*-->\s*$/;
 const TIMEOUT = 10000;
+const ENDPOINT_TIMEOUT = 60000;
+// Each section of reading view with <{ }> in it is rendered with the whole note, between these, then picked out.
+const SECTION_START = '<!-- raindown:section -->';
+const SECTION_END = '<!-- raindown:end-section -->';
+// How many sections' Markdown reading view keeps.
+const SECTIONS_KEPT = 50;
 // Shown below the Bare syntax setting, as a bare directive writes over the lines below it, up to the next blank line.
 const BARE_SYNTAX_WARNING = 'Make sure your files are version controlled or backed up before enabling bare syntax, ' +
   'otherwise existing content beneath text like "list:" could be overwritten';
@@ -37,6 +45,24 @@ function vaultPath(...parts) {
     else if (part && part !== '.') resolved.push(part);
     return resolved;
   }, []).join('/');
+}
+
+// The Markdown Raindown rendered between a section's markers, from the whole note's.
+function sectionMarkdown(markdown) {
+  const start = markdown.indexOf(SECTION_START);
+  const end = markdown.indexOf(SECTION_END);
+  if (start === -1 || end === -1) return null;
+
+  return markdown.slice(start + SECTION_START.length, end);
+}
+
+// The note with a section's lines between markers, each a block of its own, so Raindown keeps them where they are.
+function markSection(text, lineStart, lineEnd) {
+  const lines = text.split('\n');
+  lines.splice(lineEnd + 1, 0, '', SECTION_END, '');
+  lines.splice(lineStart, 0, '', SECTION_START, '');
+
+  return lines.join('\n');
 }
 
 // Takes the plugin's settings, so Bare syntax counts.
@@ -857,6 +883,8 @@ class RaindownPlugin extends Plugin {
     this.written = new Map();
     // Notes whose write-back waits for the cursor to leave a directive's line.
     this.held = new Set();
+    // Each section's Markdown in reading view, by its note's path and Markdown.
+    this.sections = new Map();
     this.status = this.addStatusBarItem();
     this.addSettingTab(new RaindownSettingTab(this.app, this));
 
@@ -864,6 +892,11 @@ class RaindownPlugin extends Plugin {
       id: 'write-back',
       name: 'Write back this note',
       checkCallback: (checking) => this.withActiveNote(checking, (file) => this.writeBack(file, { notify: true }))
+    });
+    this.addCommand({
+      id: 'run-endpoints',
+      name: 'Run the endpoints in this note',
+      checkCallback: (checking) => this.withActiveNote(checking, (file) => this.writeBack(file, { execute: true, notify: true }))
     });
     this.addCommand({
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
@@ -893,6 +926,7 @@ class RaindownPlugin extends Plugin {
     this.registerEditorExtension(tableAlignment(this));
     this.registerEditorExtension(rowDeletions());
     this.registerEditorSuggest(new DirectiveSuggest(this.app, this));
+    this.registerMarkdownPostProcessor((el, context) => this.renderSection(el, context));
     // Obsidian adds every file as it loads, so lists are only written back for notes added after that, and Raindown has
     // the vault's files as it starts.
     this.app.workspace.onLayoutReady(() => {
@@ -924,9 +958,11 @@ class RaindownPlugin extends Plugin {
     this.scheduleListsWriteBack(file);
   }
 
-  // Raindown's note as it writes it back, with its warnings, as { output, warnings }.
-  async raindown({ file, markdown, timeout = TIMEOUT }) {
-    const answer = await this.engine.rewrite({ path: file.path, markdown, bare: this.settings.bareSyntax }, { timeout });
+  // Raindown's note as it writes it back, with its warnings, as { output, warnings }, with its endpoints run if execute.
+  async raindown({ file, markdown, execute }) {
+    const note = { path: file.path, markdown, bare: this.settings.bareSyntax };
+    if (execute) note.execute = true;
+    const answer = await this.engine.rewrite(note, { timeout: execute ? ENDPOINT_TIMEOUT : TIMEOUT });
     return { output: answer.output, warnings: (answer.warnings ?? []).join('\n') };
   }
 
@@ -986,7 +1022,7 @@ class RaindownPlugin extends Plugin {
   // Saving writes back quietly, showing errors in the status bar, as a directive that's half typed fails until it's
   // done. The commands say what happened. Forced, a note's written back even if it hasn't changed since. Returns
   // whether the note changed.
-  async writeBack(file, { notify = false, force = false, confirmed = false } = {}) {
+  async writeBack(file, { execute = false, notify = false, force = false, confirmed = false } = {}) {
     if (!notify && !confirmed && this.holdWhileOnDirective(file)) return false;
 
     const original = this.editorFor(file)?.getValue() ?? await this.app.vault.read(file);
@@ -994,7 +1030,7 @@ class RaindownPlugin extends Plugin {
     if (!notify && (unchanged || !hasDirectives(original, this.settings))) return false;
 
     try {
-      const { output: markdown, warnings } = await this.raindown({ file, markdown: original });
+      const { output: markdown, warnings } = await this.raindown({ file, markdown: original, execute });
       // Raindown never empties a note, so nothing back, like from a wrapper script that failed, is an error.
       if (!markdown.trim() && original.trim()) throw new Error("Raindown didn't print the note back, so it's left as it is");
       if (markdown !== original) await this.applyToNote(file, original, markdown);
@@ -1008,6 +1044,40 @@ class RaindownPlugin extends Plugin {
       this.report(this.shortMessage(error.message, file), { notify });
       return false;
     }
+  }
+
+  // Reading view shows a section with <{ }> in it, like <{ :toc }>, as Raindown renders it, in Markdown, which Obsidian
+  // renders, as Commonmarker can't run in the plugin.
+  async renderSection(el, context) {
+    const section = context.getSectionInfo(el);
+    const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
+    const lines = section?.text.split('\n').slice(section.lineStart, section.lineEnd + 1).join('\n');
+    if (!lines?.includes('<{') || !file) return;
+
+    try {
+      const markdown = await this.sectionMarkdownFor(file, markSection(section.text, section.lineStart, section.lineEnd));
+      if (markdown === null) return;
+
+      el.replaceChildren();
+      await MarkdownRenderer.render(this.app, markdown, el, file.path, this);
+    } catch {
+      // Reading view keeps what Obsidian rendered. Saving the note shows the error.
+    }
+  }
+
+  // Reading view renders a section again each time it's shown, like switching to it, so its Markdown is kept until the
+  // note changes, and a render that's under way is shared. Failed renders aren't kept.
+  sectionMarkdownFor(file, markdown) {
+    const key = `${file.path}\0${markdown}`;
+    if (!this.sections.has(key)) {
+      const note = { path: file.path, markdown, bare: this.settings.bareSyntax };
+      const rendered = this.engine.render(note, { timeout: TIMEOUT }).then(({ output }) => sectionMarkdown(output));
+      rendered.catch(() => this.sections.delete(key));
+      this.sections.set(key, rendered);
+      if (this.sections.size > SECTIONS_KEPT) this.sections.delete(this.sections.keys().next().value);
+    }
+
+    return this.sections.get(key);
   }
 
   // Whether to wait to write back while the cursor's on a directive's line, as what's typed there is often half done,
@@ -1190,5 +1260,5 @@ Object.assign(module.exports, {
   alignTables, applyRewrite, blockCommentChanges, carriedOnCell, cellToggleAt, changedLines, changedRange, changeOutsideHistory,
   directiveLines, DirectiveSuggest, directiveTokens, enteredCell, errorLine, hasDirectives, inFixedCell, inFormulaCell,
   movedCursor, onDirectiveLine, orphanedRows, rowDeletions, tabbedCell, tableAlignment, tableAlignmentChanges, tableFiles,
-  tableLines, vaultPath
+  tableLines, markSection, sectionMarkdown, vaultPath
 });

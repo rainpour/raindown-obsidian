@@ -15,6 +15,7 @@ class Plugin {
   registerEvent() {}
   registerEditorExtension() {}
   registerEditorSuggest() {}
+  registerMarkdownPostProcessor(processor) { this.postProcessor = processor; }
 }
 
 class Notice {
@@ -42,4 +43,12 @@ const editorInfoField = {};
 
 const Platform = { isDesktopApp: true };
 
-module.exports = { EditorSuggest, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField };
+const MarkdownRenderer = {
+  rendered: [],
+  async render(_app, markdown, el, sourcePath) {
+    MarkdownRenderer.rendered.push({ markdown, sourcePath });
+    el.replaceChildren(markdown);
+  }
+};
+
+module.exports = { EditorSuggest, MarkdownRenderer, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField };

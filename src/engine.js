@@ -10,22 +10,39 @@ const LARGEST_FILE = 4 * 1024 * 1024;
 const NODES_FOLDER = '.raindown';
 // How long Raindown has to start and give its first answer, as Ruby starts and loads Raindown first.
 const START_TIMEOUT = 60000;
+// A link-local host, as a URL has it, like cloud metadata at 169.254.169.254, however it was written, which an
+// endpoint can't request, as with curl in Raindown.
+const LINK_LOCAL = /^(?:169\.254\.\d+\.\d+|\[(?:fe[89ab][0-9a-f]:[^\]]*|::ffff:a9fe:[0-9a-f]+)\])$/i;
 
 class RaindownEngine {
-  // runtime gives what bin/build embeds in main.js: the module, the worker's code and the load path.
-  constructor(app, { runtime = () => require('./runtime'), Worker = globalThis.Worker } = {}) {
+  // runtime gives what bin/build embeds in main.js: the module, the worker's code and the load path. requestUrl sends
+  // endpoints' requests, as Obsidian's does.
+  constructor(app, {
+    runtime = () => require('./runtime'), Worker = globalThis.Worker, requestUrl = (request) => require('obsidian').requestUrl(request)
+  } = {}) {
     this.app = app;
     this.runtime = runtime;
     this.Worker = Worker;
+    this.requestUrl = requestUrl;
     this.pending = new Map();
     this.nextId = 1;
   }
 
-  // Resolves with { output, warnings, written }, or rejects with Raindown's error, or when it didn't answer in time.
-  async rewrite({ path, markdown, bare }, { timeout }) {
+  // The note, { path, markdown, bare }, as Raindown writes it back, running its endpoints with execute: true, resolving
+  // with { output, warnings, written }, or rejecting with Raindown's error, or when it didn't answer in time.
+  rewrite(note, { timeout }) {
+    return this.answer({ type: 'rewrite', ...note }, timeout);
+  }
+
+  // The note rendered as Markdown, with its <{ }> filled in, for reading view, which Obsidian renders, as { output }.
+  render(note, { timeout }) {
+    return this.answer({ type: 'render', ...note }, timeout);
+  }
+
+  async answer(request, timeout) {
     if (await this.nodesChanged()) this.stop();
     await this.start();
-    const answer = await this.ask({ type: 'rewrite', path, markdown, bare }, timeout);
+    const answer = await this.ask(request, timeout);
     await Promise.all(answer.written.map(([file, bytes]) => this.writeFile(file, bytes)));
     return answer;
   }
@@ -88,7 +105,9 @@ class RaindownEngine {
     });
   }
 
-  receive({ id, error, ...answer }) {
+  receive({ id, type, error, ...answer }) {
+    if (type === 'fetch') return this.fetch(id, answer.request);
+
     const request = this.pending.get(id);
     if (!request) return;
 
@@ -96,6 +115,25 @@ class RaindownEngine {
     clearTimeout(request.timer);
     if (error) request.reject(new Error(error));
     else request.resolve(answer);
+  }
+
+  // An endpoint's request, which Raindown in the worker waits for, sent with Obsidian's requestUrl, which only the main
+  // thread has. Like curl in Raindown, it refuses link-local hosts, but it can't pin a name's address, or stop
+  // redirects, as curl does.
+  async fetch(id, { method, url, headers, body }) {
+    let response;
+    try {
+      const { hostname } = new URL(url);
+      if (LINK_LOCAL.test(hostname)) throw new Error(`Endpoint snippets can't request link-local addresses, like cloud metadata at ${hostname}`);
+
+      const started = performance.now();
+      const received = await this.requestUrl({ url, method, headers, body: body ?? undefined, throw: false });
+      const contentType = Object.entries(received.headers ?? {}).find(([name]) => name.toLowerCase() === 'content-type')?.[1];
+      response = { body: received.text, status: received.status, content_type: contentType ?? '', milliseconds: Math.round(performance.now() - started) };
+    } catch (error) {
+      response = { error: error.message };
+    }
+    this.worker?.postMessage({ type: 'fetched', id, response });
   }
 
   fail(error) {

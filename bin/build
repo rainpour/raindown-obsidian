@@ -74,7 +74,7 @@ loaded['gems'].each do |name, gem|
   copy(data, File.join(STAGE, 'gems', name, 'data')) if File.directory?(data)
   load_paths.concat(gem['require_paths'].map { "/gems/#{name}/#{it}" })
 end
-%w[engine.rb bytecode.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
+%w[engine.rb bytecode.rb worker.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
 
 # 3. Bytecode, with build/root as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest are
 # rarely loaded, and they're compiled from source when they are.

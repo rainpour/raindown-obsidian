@@ -809,3 +809,57 @@ test('moves down from the delimiter row on Enter and Tab, like from any row, rat
   assert.equal(RaindownPlugin.carriedOnCell(note, at), null);
   assert.equal(RaindownPlugin.inFixedCell(`table: 'tasks.csv'\n${note}`, { line: 2, ch: 10 }, { bare: true }), false);
 });
+
+test("sends an endpoint's request from Raindown with Obsidian's requestUrl, and refuses link-local hosts", async () => {
+  const { vault } = fakeVault({ 'note.md': '# A' });
+  const Worker = fakeWorker(() => ({ ready: true }));
+  const sent = [];
+  const requestUrl = async (request) => {
+    sent.push(request);
+    return { status: 201, text: '{"id":1}', headers: { 'Content-Type': 'application/json' } };
+  };
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker, requestUrl });
+  await engine.start();
+
+  await engine.receive({ id: 1, type: 'fetch', request: { method: 'POST', url: 'https://a.io/x', headers: { A: 'b' }, body: 'c' } });
+  await engine.receive({ id: 2, type: 'fetch', request: { method: 'GET', url: 'http://2852039166/latest', headers: {}, body: null } });
+  assert.deepEqual(sent, [{ url: 'https://a.io/x', method: 'POST', headers: { A: 'b' }, body: 'c', throw: false }]);
+  const [first, second] = Worker.made[0].sent.slice(1);
+  assert.deepEqual([first.type, first.id, { ...first.response, milliseconds: 0 }], [
+    'fetched', 1, { body: '{"id":1}', status: 201, content_type: 'application/json', milliseconds: 0 }
+  ]);
+  assert.match(second.response.error, /link-local addresses, like cloud metadata at 169\.254\.169\.254$/);
+});
+
+test('runs the endpoints in the active note from its command', async () => {
+  const { raindown, engine, file } = await plugin({ content: '<!-- endpoint: -->\n' });
+  raindown.app.workspace.getActiveFile = () => file;
+
+  raindown.commands.find(({ id }) => id === 'run-endpoints').checkCallback(false);
+  await new Promise((done) => { setTimeout(done, 10); });
+  assert.deepEqual(engine.asked, [{ path: 'note.md', markdown: '<!-- endpoint: -->\n', bare: false, execute: true }]);
+});
+
+test('shows a section with <{ }> in reading view as Raindown renders it, in Markdown, which Obsidian renders', async () => {
+  const text = '# A\n\n<{ :toc }>\n\nText\n';
+  const { raindown } = await plugin();
+  const asked = [];
+  raindown.engine = {
+    ...fakeEngine(),
+    render: async (note) => {
+      asked.push(note);
+      return { output: note.markdown.replace('<{ :toc }>', '- [A](#a)') };
+    }
+  };
+  raindown.app.vault.getAbstractFileByPath = (path) => ({ path });
+  const el = { children: ['as Obsidian rendered it'], replaceChildren(...children) { this.children = children; } };
+  const context = (line) => ({ sourcePath: 'note.md', getSectionInfo: () => ({ text, lineStart: line, lineEnd: line }) });
+
+  await raindown.renderSection(el, context(2));
+  await raindown.renderSection(el, context(2));
+  assert.deepEqual(el.children, ['\n\n- [A](#a)\n\n']);
+  assert.deepEqual(asked.map(({ path, bare }) => [path, bare]), [['note.md', false]]);
+
+  await raindown.renderSection(el, context(4));
+  assert.equal(asked.length, 1);
+});

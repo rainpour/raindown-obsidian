@@ -1,7 +1,8 @@
 # frozen_string_literal: true
 
 # Writes back test/vault, with notes using each of Raindown's directives, and a project node in Ruby and in Markdown,
-# then lists, in build/loaded.json, its answers, for scripts/smoke.js to check the plugin's against, and every Ruby file
+# then lists, in build/loaded.json, its answers, written back and rendered for reading view, for scripts/smoke.js to
+# check the plugin's against, and every Ruby file
 # that loaded, for bin/build to pack into the WebAssembly module and no more: the standard library's, by their paths in its folder, with this Ruby's platform folder as WebAssembly's, and each
 # gem's folder, load paths and the files that loaded from it. Run natively, from a Raindown checkout, as bin/build does:
 #   bundle exec ruby -rrbconfig -I PLUGIN/src PLUGIN/scripts/trace.rb PLUGIN/build/loaded.json
@@ -12,15 +13,18 @@ require 'engine'
 
 VAULT = File.expand_path('../test/vault', __dir__)
 
-# Native Raindown's answers, by each note's path, which scripts/smoke.js checks the plugin's match.
-answers = Dir.mktmpdir do |vault|
-  FileUtils.cp_r("#{VAULT}/.", vault)
-  request = File.join(vault, 'request.json')
-  Dir.glob('**/*.md', base: VAULT).sort.to_h do |path|
-    File.write(request, JSON.generate(path: File.join(vault, path), markdown: File.read(File.join(VAULT, path))))
-    answer = JSON.parse(RaindownEngine.answer(request))
-    abort "#{path}: #{answer['error']}" if answer['error']
-    [path, answer['output']]
+# Native Raindown's answers, by each note's path, written back and rendered, which scripts/smoke.js checks the
+# plugin's match.
+answers, renders = [false, true].map do |render|
+  Dir.mktmpdir do |vault|
+    FileUtils.cp_r("#{VAULT}/.", vault)
+    request = File.join(vault, 'request.json')
+    Dir.glob('**/*.md', base: VAULT).sort.to_h do |path|
+      File.write(request, JSON.generate(path: File.join(vault, path), markdown: File.read(File.join(VAULT, path)), render:))
+      answer = JSON.parse(RaindownEngine.answer(request))
+      abort "#{path}: #{answer['error']}" if answer['error']
+      [path, answer['output']]
+    end
   end
 end
 
@@ -45,6 +49,6 @@ gems = JSON.parse(ENV.fetch('RAINDOWN_TRACE_GEMS')).to_h do |name, gem|
 end
 File.write(ARGV.fetch(0), JSON.pretty_generate(
   stdlib: stdlib.map { it.delete_prefix("#{lib}/").sub("#{RbConfig::CONFIG['arch']}/", 'wasm32-wasi/') }.sort, gems:,
-  answers:
+  answers:, renders:
 ))
 puts "#{stdlib.size} standard library files and #{gems.size} gems loaded"

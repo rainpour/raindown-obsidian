@@ -24,10 +24,17 @@ module RaindownEngine
   def answer(file)
     request = JSON.parse(File.read(file))
     Raindown::Pages.changed(request.fetch('changed', []))
-    answer = Raindown::Editing.rewrite_markdown(request.fetch('markdown'), path: request.fetch('path'), bare: request['bare'] == true)
-    JSON.generate(answer)
+    JSON.generate(answered(request, request.fetch('markdown'), path: request.fetch('path'), bare: request['bare'] == true))
   rescue StandardError, ScriptError => e
     JSON.generate(error: e.message)
+  end
+
+  # Rendered as Markdown, for reading view, which Obsidian renders itself, or written back, running its endpoints with
+  # execute.
+  def answered(request, markdown, **options)
+    return { output: Raindown::Editing.render_markdown(markdown, **options, commonmark: false) } if request['render']
+
+    Raindown::Editing.rewrite_markdown(markdown, **options, execute: request['execute'] == true)
   end
 
   def dated(value)

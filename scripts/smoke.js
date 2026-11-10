@@ -1,12 +1,14 @@
 'use strict';
 
 // Runs main.js's own engine and worker, with Raindown in ruby.wasm, on a copy of test/vault, as Obsidian would, and
-// checks each note's written back as native Raindown wrote it, in build/loaded.json. bin/build runs it once main.js is
+// checks each note's written back, and rendered for reading view, as native Raindown did, in build/loaded.json, and
+// that an endpoint runs, through requestUrl, which is Node's fetch here. bin/build runs it once main.js is
 // built, so a file missing from the module, or a ruby.wasm update breaking the worker, fails the build, not a release.
 //   node scripts/smoke.js
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const http = require('node:http');
 const { resolveObjectURL } = require('node:buffer');
 
 const ROOT = path.join(__dirname, '..');
@@ -68,22 +70,53 @@ function vaultApp(folder) {
   };
 }
 
+// Obsidian's requestUrl, as Node's fetch.
+async function requestUrl({ url, method, headers, body }) {
+  const response = await fetch(url, { method, headers, body });
+  return { status: response.status, text: await response.text(), headers: Object.fromEntries(response.headers) };
+}
+
+// Whether each note's answer, written back or rendered, is native Raindown's, or else why not.
+async function checkNotes(engine, folder, answers, type) {
+  const failures = [];
+  for (const [note, expected] of Object.entries(answers)) {
+    const markdown = fs.readFileSync(path.join(folder, note), 'utf8');
+    const answer = await engine[type]({ path: note, markdown, bare: false }, { timeout: 60000 }).catch((error) => ({ error }));
+    if (answer.error) failures.push(`${note}: ${answer.error.message}`);
+    else if (answer.output !== expected) failures.push(`${note}'s ${type} was:\n${answer.output}\nnot native Raindown's:\n${expected}`);
+  }
+  return failures;
+}
+
+// An endpoint, run as its command runs it, to a server of the smoke test's own.
+async function checkEndpoint(engine) {
+  const server = http.createServer((_request, response) => response.writeHead(200, { 'Content-Type': 'application/json' }).end('{"id":1}'));
+  await new Promise((listening) => { server.listen(0, '127.0.0.1', listening); });
+  try {
+    const markdown = `<!-- endpoint: -->\n\`\`\`sh\ncurl http://127.0.0.1:${server.address().port}/id\n\`\`\`\n<!-- :endpoint -->\n`;
+    const { output } = await engine.rewrite({ path: 'endpoint.md', markdown, bare: false, execute: true }, { timeout: 60000 });
+    return output.includes('```json\n{\n  "id": 1\n}\n```') ? [] : [`The endpoint was written back as:\n${output}`];
+  } catch (error) {
+    return [`The endpoint failed: ${error.message}`];
+  } finally {
+    server.close();
+  }
+}
+
 async function smoke() {
   const load = mainModules();
   const { RaindownEngine } = load('./engine');
-  const { answers } = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'loaded.json'), 'utf8'));
+  const { answers, renders } = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'loaded.json'), 'utf8'));
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-smoke-'));
   fs.cpSync(path.join(ROOT, 'test', 'vault'), folder, { recursive: true });
-  const engine = new RaindownEngine(vaultApp(folder), { runtime: () => load('./runtime'), Worker: InProcessWorker });
-  const failures = [];
+  const engine = new RaindownEngine(vaultApp(folder), { runtime: () => load('./runtime'), Worker: InProcessWorker, requestUrl });
   const started = performance.now();
+  let failures;
   try {
-    for (const [note, expected] of Object.entries(answers)) {
-      const markdown = fs.readFileSync(path.join(folder, note), 'utf8');
-      const answer = await engine.rewrite({ path: note, markdown, bare: false }, { timeout: 60000 }).catch((error) => ({ error }));
-      if (answer.error) failures.push(`${note}: ${answer.error.message}`);
-      else if (answer.output !== expected) failures.push(`${note} was written back as:\n${answer.output}\nnot as native Raindown wrote it:\n${expected}`);
-    }
+    failures = [
+      ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
+      ...await checkEndpoint(engine)
+    ];
   } finally {
     engine.stop();
     fs.rmSync(folder, { recursive: true, force: true });
@@ -91,7 +124,7 @@ async function smoke() {
   if (failures.length) throw new Error(failures.join('\n\n'));
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(`Smoke test: ${Object.keys(answers).length} notes written back as native Raindown wrote them, in ${seconds} s`);
+  console.log(`Smoke test: ${Object.keys(answers).length} notes written back and rendered as native Raindown did them, and an endpoint run, in ${seconds} s`);
 }
 
 smoke().catch((error) => {
