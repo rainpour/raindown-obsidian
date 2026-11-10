@@ -41,12 +41,10 @@ jobs:
       - uses: ruby/setup-ruby@v1
         with:
           ruby-version: '3.4'
-      # Without checkouts of its sibling gems, like lowkey, which its lockfile names, Raindown's Gemfile takes them from
-      # RubyGems, so the lockfile's made again.
+      # Without checkouts of its sibling gems, like lowkey, Raindown's Gemfile takes them from RubyGems.
       - name: Install Raindown's gems, and rbwasm
         working-directory: build/raindown
         run: |
-          rm Gemfile.lock
           bundle install
           gem install ruby_wasm --no-document
       - uses: bytecodealliance/actions/wasmtime/setup@v1
