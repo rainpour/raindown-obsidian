@@ -1,11 +1,15 @@
 name: release
 
-# Attaches the plugin's files to a GitHub release, which Obsidian installs from. Obsidian needs the tag to be the
-# manifest's version, like 0.2.0, without a v. This folder is the root of the plugin's own repo, where this runs.
+# Builds main.js with Raindown at RAINDOWN_VERSION, a tag or commit, packed inside it, and checks it with the smoke test,
+# on each push and pull request. A tag then attaches the plugin's files to a GitHub release, which Obsidian installs
+# from. Obsidian needs the tag to be the manifest's version, like 0.2.0, without a v. This folder is the root of the
+# plugin's own repo, where this runs.
 
 on:
   push:
+    branches: [main]
     tags: ['*']
+  pull_request:
 
 jobs:
   release:
@@ -22,15 +26,47 @@ jobs:
           node-version: 22
       - run: npm test
       - name: Check the tag is the manifest's version
+        if: startsWith(github.ref, 'refs/tags/')
         run: test "$GITHUB_REF_NAME" = "$(node -p "require('./manifest.json').version")"
+
+      - name: Read the Raindown it's built with
+        id: raindown
+        run: echo "ref=$(cat RAINDOWN_VERSION)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v7
+        with:
+          repository: rainpour/raindown
+          ref: ${{ steps.raindown.outputs.ref }}
+          path: build/raindown
+      - uses: ruby/setup-ruby@v1
+        with:
+          working-directory: build/raindown
+      # Without checkouts of its sibling gems, like lowkey, which its lockfile names, Raindown's Gemfile takes them from
+      # RubyGems, so the lockfile's made again.
+      - name: Install Raindown's gems, and rbwasm
+        working-directory: build/raindown
+        run: |
+          rm Gemfile.lock
+          bundle install
+          gem install ruby_wasm --no-document
+      - uses: bytecodealliance/actions/wasmtime/setup@v1
+      # ruby.wasm's downloads, which bin/build names the version of.
+      - uses: actions/cache@v4
+        with:
+          path: build/runtime
+          key: ruby-wasm-${{ hashFiles('bin/build') }}
+      - name: Build main.js, and run the smoke test
+        run: RAINDOWN_DIR=build/raindown WASMTIME="$(which wasmtime)" bin/build
+
       # Before the release, so one that can't be verified is never published.
       - uses: actions/attest@v4
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           subject-path: |
             main.js
             manifest.json
             styles.css
       - name: Release
+        if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --generate-notes

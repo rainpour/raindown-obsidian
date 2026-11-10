@@ -10,7 +10,7 @@ WebAssembly has no processes or sockets, so Ruby waits on the worker, through ru
 
 ## Building
 
-Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `rbwasm`, from the `ruby_wasm` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. It downloads ruby.wasm into `build/` the first time.
+Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`, which git ignores, as CI builds it for a release. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `rbwasm`, from the `ruby_wasm` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. It downloads ruby.wasm into `build/` the first time.
 
 ```sh
 gem install ruby_wasm
@@ -33,7 +33,7 @@ To link it into a vault while you work on it, `ln -s "$PWD" VAULT/.obsidian/plug
 
 ### Releasing
 
-Obsidian installs a plugin from its GitHub repo's releases, so the plugin is released from a repo of its own, with this folder as its root. `bin/bump` builds `main.js` and commits it, then runs `npm version minor`, or `patch` with `--patch` or `-p`, or `major` with `--major`, which sets the version in `package.json` and `manifest.json`, adds it to `versions.json` with the oldest Obsidian it runs on, and tags it without a `v`, like `0.2.0`, as Obsidian needs, then pushes it, which runs the tests and attaches `main.js`, `manifest.json` and `styles.css` to a release:
+Obsidian installs a plugin from its GitHub repo's releases, so the plugin is released from a repo of its own, with this folder as its root. `bin/bump` runs `npm version minor`, or `patch` with `--patch` or `-p`, or `major` with `--major`, which sets the version in `package.json` and `manifest.json`, adds it to `versions.json` with the oldest Obsidian it runs on, and tags it without a `v`, like `0.2.0`, as Obsidian needs, then pushes it. CI then runs the tests, builds `main.js` with Raindown at `RAINDOWN_VERSION`, a tag like `v0.19.0`, or a commit, runs the smoke test, and attaches `main.js`, `manifest.json` and `styles.css` to a release, with an attestation that CI built them. It builds and smoke tests each push to `main` too. To build with a new Raindown, release it, then set `RAINDOWN_VERSION` to its tag:
 
 ```sh
 bin/bump # minor

@@ -12,6 +12,7 @@
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
 #   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm.
 #   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did.
+# Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
 # ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM.
 #   gem install ruby_wasm
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
@@ -24,8 +25,14 @@ ROOT = File.expand_path('..', __dir__)
 BUILD = File.join(ROOT, 'build')
 STAGE = File.join(BUILD, 'root')
 RAINDOWN = File.expand_path(ENV.fetch('RAINDOWN_DIR', '../raindown'), ROOT)
-# The gems' Ruby, from Raindown's own, which mise gives it, and rbwasm, installed into it.
-BUNDLED = %w[mise exec -- bundle exec].freeze
+# The gems' Ruby is Raindown's own, which mise gives it, unless there's no mise, like in CI, with rbwasm installed into it.
+def mise_exec
+  return [] unless system('mise', '--version', out: File::NULL, err: File::NULL)
+
+  %w[mise exec --]
+end
+MISE = mise_exec.freeze
+BUNDLED = [*MISE, 'bundle', 'exec'].freeze
 
 def run(*command, chdir: ROOT)
   system(*command, chdir:, exception: true)
@@ -91,7 +98,7 @@ end
 
 # 4. Packed.
 wasm = File.join(BUILD, 'raindown.wasm')
-run(*BUNDLED.first(3), 'rbwasm', 'pack', File.join(ruby_npm, 'ruby.wasm'), '-o', wasm,
+run(*MISE, 'rbwasm', 'pack', File.join(ruby_npm, 'ruby.wasm'), '-o', wasm,
     *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] }, chdir: RAINDOWN)
 
 # main.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the

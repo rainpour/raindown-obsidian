@@ -15,12 +15,9 @@ case "${1:-}" in
   *) echo "Unknown option: $1. Use --patch, -p or --major." >&2; exit 1 ;;
 esac
 
-git diff --quiet HEAD -- . ':!main.js' || { echo 'Commit your changes first, so the release has them.' >&2; exit 1; }
+git diff --quiet HEAD || { echo 'Commit your changes first, so the release has them.' >&2; exit 1; }
 
-# main.js is built from src/, with Raindown, and only committed for a release.
-bin/build
-git add main.js
-git diff --cached --quiet || git commit --message 'Build main.js'
+# CI builds main.js for the tag, with Raindown at RAINDOWN_VERSION, and releases it.
 
 version=$(node -p "require('./manifest.json').version")
 if git rev-parse --quiet --verify "refs/tags/$version" >/dev/null; then
