@@ -7,7 +7,8 @@
 # gem's folder, load paths and the files that loaded from it. Run natively, from a Raindown checkout, as bin/build does:
 #   bundle exec ruby -rrbconfig -I PLUGIN/src PLUGIN/scripts/trace.rb PLUGIN/build/loaded.json
 # Bundler only finds the gems. Then it runs again without Bundler or RubyGems, from the gems' folders, as Ruby does in
-# WebAssembly. Gems with native code, like json, are left to the standard library, which has them built in.
+# WebAssembly. Gems with native code, like json, or prism, even precompiled, are left to the standard library, which has
+# them built in, as their Ruby must match the code built into WebAssembly's Ruby.
 require 'tmpdir'
 require 'engine'
 
@@ -31,8 +32,10 @@ end
 loaded = $LOADED_FEATURES.select { it.end_with?('.rb') }
 
 if defined?(Bundler)
+  native = $LOADED_FEATURES.grep(/\.(?:so|bundle)\z/)
   gems = Gem.loaded_specs.values.select do |spec|
-    spec.name != 'bundler' && spec.extensions.empty? && loaded.any? { it.start_with?("#{spec.full_gem_path}/") }
+    inside = ->(file) { file.start_with?("#{spec.full_gem_path}/") }
+    spec.name != 'bundler' && spec.extensions.empty? && native.none?(&inside) && loaded.any?(&inside)
   end
   gems = gems.sort_by(&:name).to_h { [it.name, { root: it.full_gem_path, require_paths: it.require_paths }] }
   paths = [File.expand_path(__dir__ + '/../src'), *gems.values.flat_map { |gem| gem[:require_paths].map { File.join(gem[:root], it) } }]
