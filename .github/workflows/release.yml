@@ -13,7 +13,8 @@ on:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # 24.04, which still has each Ruby patch release, unlike newer runners.
+    runs-on: ubuntu-24.04
     permissions:
       contents: write
       id-token: write
@@ -37,10 +38,11 @@ jobs:
           repository: rainpour/raindown
           ref: ${{ steps.raindown.outputs.ref }}
           path: build/raindown
-      # The latest 3.4, as Raindown's own CI uses, as newer runners don't have each patch release.
+      # Raindown's .ruby-version, as the standard library files a write-back loads, which are packed, can differ
+      # between patch releases.
       - uses: ruby/setup-ruby@v1
         with:
-          ruby-version: '3.4'
+          working-directory: build/raindown
       # Without checkouts of its sibling gems, like lowkey, Raindown's Gemfile takes them from RubyGems.
       - name: Install Raindown's gems, and rbwasm
         working-directory: build/raindown
