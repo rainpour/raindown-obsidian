@@ -4,7 +4,7 @@ require 'json'
 require 'raindown/editing'
 
 # What the plugin's worker asks of Raindown, running in Ruby compiled to WebAssembly: a note written back, as
-# "raindown server" answers it. The request is a file, /request.json, so the note's never quoted into Ruby code, and the
+# "raindown server" answers it, or rendered as Markdown, for reading view. The request is a file, /request.json, so the note's never quoted into Ruby code, and the
 # vault is at /vault, as the worker mirrors it.
 module RaindownEngine
   # A date in front matter, like 2024-01-02, which YAML reads as a Date, and Obsidian leaves as text.
