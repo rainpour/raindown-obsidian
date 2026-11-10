@@ -9,6 +9,8 @@ on:
   push:
     branches: [main]
     tags: ['*']
+    # bin/bump's version commit is built by its tag's run, as GitHub doesn't filter tags by paths.
+    paths-ignore: [manifest.json, package.json, versions.json]
   pull_request:
 
 jobs:
