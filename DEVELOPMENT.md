@@ -6,7 +6,7 @@ Raindown runs inside the plugin, in [ruby.wasm](https://github.com/ruby/ruby.was
 
 Ruby can't wait for Obsidian to read a file, so the worker has a copy of the vault's notes, data files and `.raindown` folders in Ruby's in-memory folder, at `/vault`, sent as it starts and as they change. The files Raindown writes, like a table's CSV, come back with each answer, and the plugin writes them through Obsidian. Obsidian doesn't say when a hidden file changes, so each write-back checks the `.raindown` folders first, and starts Raindown again when they've changed, so their nodes load again. Raindown's given the front matter Obsidian's already read, and told which files changed at each write-back, rather than reading every note, or checking their modified times, for a `list:`, which takes seconds in a vault of thousands of notes in WebAssembly.
 
-Endpoints and JavaScript nodes need processes and sockets, which WebAssembly doesn't have, and `<{ }>` in reading view needs Commonmarker, which is native, so they don't run in the plugin yet.
+WebAssembly has no processes or sockets, so Ruby waits on the worker, through ruby.wasm's `evalAsync`, for what needs them, which `src/worker.rb` asks for: an endpoint's request, which the worker sends to Obsidian's main thread, for `requestUrl`, and a project's JavaScript components, which run in the worker, imported from their text, rather than in Node.js. So the worker answers one request at a time. Commonmarker is native too, so reading view's `<{ }>` sections are rendered by Raindown as Markdown, with `commonmark: false`, then by Obsidian's `MarkdownRenderer`.
 
 ## Building
 

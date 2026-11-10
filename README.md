@@ -89,13 +89,18 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 | -------------------------------------------- | -------------------------------------------------------------------------------------- |
 | **Raindown: Write back this note**           | Writes back now, and says what happened                                                |
 | **Raindown: Write back all notes**           | Writes back every note with directives, and says how many changed                      |
+| **Raindown: Run the endpoints in this note** | Runs the note's endpoints that have no response yet, and writes their responses        |
 | **Raindown: Open this table's file**         | Opens the file of the table at the cursor, in your spreadsheet app, on desktop         |
 
+Reading view shows `<{ }>`, like `<{ :toc }>`, as Raindown renders it, through Obsidian's own Markdown.
+
 > [!NOTE]
-> The plugin doesn't run [endpoints](https://raindown.dev/docs/endpoint) or JavaScript components yet, or show `<{ }>` in reading view. The [CLI](https://raindown.dev/docs/cli) and VS Code extension do.
+> JavaScript components run inside the plugin, not Node.js, so they can't import other files or use Node's APIs, like `fs`.
 
 ## Files and network
 
 - **Running Raindown** - Raindown is written in Ruby, but runs inside the plugin compiled to WebAssembly in a background worker. Components can still be written in Ruby, JavaScript or Markdown
 - **Files** - It reads a copy of your vault's notes, data files and `.raindown` folders, and writes only the files a note asks it to
 - **Network** - The plugin doesn't use the network unless you ask it to via endpoints or run requests via your vault's own Ruby/JavaScript nodes in `.raindown`
+- **Endpoints** - Run only from **Run the endpoints in this note**, and sent by Obsidian, which refuses link-local addresses, like cloud metadata at `169.254.169.254`. Unlike the CLI's curl, it follows redirects, and can't pin a name to the address it was checked at
+- **Size** - `main.js` is about 8.5 MB, as Ruby, compiled to WebAssembly, and Raindown are packed inside it, compressed, so there's nothing else to install, on desktop or mobile. It's started once a session, in the background, in about a second

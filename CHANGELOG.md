@@ -22,13 +22,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Raindown runs inside the plugin, so there's nothing else to install
+- Endpoints are sent by Obsidian, rather than curl
+- JavaScript components run inside the plugin, rather than Node.js
+- `<{ }>` in reading view is rendered by Obsidian, from Raindown's Markdown
 - Typing in a `table:` table's fixed column saves on Enter, Tab or Cmd+S, not as you type
 
 ### Removed
 
-- Running endpoints, for now
-- JavaScript components, for now
-- `<{ }>` in reading view, for now
 - The Raindown command setting, and Find Raindown
 
 ### Fixed
