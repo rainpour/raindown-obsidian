@@ -37,9 +37,10 @@ jobs:
           repository: rainpour/raindown
           ref: ${{ steps.raindown.outputs.ref }}
           path: build/raindown
+      # The latest 3.4, as Raindown's own CI uses, as newer runners don't have each patch release.
       - uses: ruby/setup-ruby@v1
         with:
-          working-directory: build/raindown
+          ruby-version: '3.4'
       # Without checkouts of its sibling gems, like lowkey, which its lockfile names, Raindown's Gemfile takes them from
       # RubyGems, so the lockfile's made again.
       - name: Install Raindown's gems, and rbwasm
