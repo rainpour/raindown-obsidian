@@ -1,9 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const fs = require('node:fs');
 const Module = require('node:module');
-const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
@@ -16,54 +14,24 @@ Module._resolveFilename = function (request, ...rest) {
   return resolve.call(this, request, ...rest);
 };
 
-// A home and a shell of its own, so Raindown already on this computer isn't found.
-process.env.HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-home-'));
-process.env.SHELL = fakeShell('');
+const RaindownPlugin = require('../src/plugin');
+const { RaindownEngine } = require('../src/engine');
+const { Notice } = require('./obsidian');
 
-const RaindownPlugin = require('../main');
-const { FileSystemAdapter, Modal, Notice } = require('./obsidian');
-
-// A stand-in for raindown that runs the script, and has no server, like a Raindown from before it.
-function fakeRaindown(dir, script) {
-  const file = path.join(dir, 'raindown');
-  fs.writeFileSync(file, `#!/usr/bin/env node\nif (process.argv[2] === 'server') process.exit(1);\n${script}\n`, { mode: 0o755 });
-  return file;
+// A stand-in for Raindown, filling in tables of contents, or answering as it's given.
+function fakeEngine(answer = (markdown) => ({ output: markdown.replace('<!-- :toc -->', '- [A](#a)\n<!-- :toc -->'), warnings: [] })) {
+  return {
+    asked: [],
+    async rewrite(request) {
+      this.asked.push(request);
+      return answer(request.markdown);
+    },
+    start: async () => {},
+    stop: () => {},
+    fileChanged: () => {},
+    fileRemoved: () => {}
+  };
 }
-
-// A stand-in for "raindown server", filling in tables of contents and rendering sections, which logs each request.
-function fakeServer(dir) {
-  const log = path.join(dir, 'requests.log');
-  const file = path.join(dir, 'raindown-server');
-  fs.writeFileSync(file, `#!/usr/bin/env node
-const fs = require('fs');
-console.log(JSON.stringify({ ready: true, version: '0.18.0' }));
-let buffer = '';
-process.stdin.on('data', (chunk) => {
-  buffer += chunk;
-  for (let end = buffer.indexOf('\\n'); end !== -1; end = buffer.indexOf('\\n')) {
-    const request = JSON.parse(buffer.slice(0, end));
-    buffer = buffer.slice(end + 1);
-    fs.appendFileSync(${JSON.stringify(log)}, (request.rewrite ? 'rewrite' : 'render') + '\\n');
-    const output = request.rewrite
-      ? request.markdown.replace('<!-- :toc -->', '- [A](#a)\\n<!-- :toc -->')
-      : '<h1>A</h1><!-- raindown:section --><ul></ul><!-- raindown:end-section -->';
-    console.log(JSON.stringify({ id: request.id, output, warnings: [] }));
-  }
-});
-`, { mode: 0o755 });
-  return { command: file, requests: () => fs.readFileSync(log, 'utf8').trim().split('\n') };
-}
-
-// A stand-in for a login shell, whose setup prints first, then prints where raindown is.
-function fakeShell(found) {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-shell-')), 'zsh');
-  fs.writeFileSync(file, `#!/bin/sh\necho 'Welcome back'\necho '${found}'\n`, { mode: 0o755 });
-  return file;
-}
-
-const FILL_TOC = `let input = '';
-process.stdin.on('data', (chunk) => { input += chunk; });
-process.stdin.on('end', () => process.stdout.write(input.replace('<!-- :toc -->', '- [A](#a)\\n<!-- :toc -->')));`;
 
 // An open note's editor, which Obsidian saves to the vault on its own.
 // A stand-in for Obsidian's editor, with positions as { line, ch } like its own, and changes that span lines, made
@@ -93,11 +61,11 @@ function fakeEditor(text) {
   };
 }
 
-async function plugin({ dir, content, command, typed, editor }) {
+async function plugin({ content = '', typed, editor, engine = fakeEngine() } = {}) {
   let current = content;
   const app = {
     vault: {
-      adapter: new FileSystemAdapter(dir),
+      adapter: {},
       read: async () => current,
       process: async (_file, change) => { current = change(typed ?? current); },
       on: () => {}
@@ -111,9 +79,9 @@ async function plugin({ dir, content, command, typed, editor }) {
   };
   const raindown = new RaindownPlugin(app);
   await raindown.onload();
-  raindown.settings.command = command;
+  raindown.engine = engine;
 
-  return { raindown, file: { path: 'note.md', extension: 'md' }, current: () => current };
+  return { raindown, engine, file: { path: 'note.md', extension: 'md' }, current: () => current };
 }
 
 test('only applies what Raindown wrote back to the note it was given', () => {
@@ -129,115 +97,65 @@ test('only starts Raindown for notes with directives', () => {
   assert.ok(RaindownPlugin.hasDirectives('# A\n\ntoc:\n', { bareSyntax: true }));
 });
 
-test('passes the note to Raindown to rewrite, and -x to run its endpoints', () => {
-  assert.deepEqual(RaindownPlugin.rewriteArgs('/v/note.md'), ['/v/note.md', '--stdin', '--rewrite']);
-  assert.deepEqual(RaindownPlugin.rewriteArgs('/v/note.md', { execute: true }), ['/v/note.md', '--stdin', '--rewrite', '-x']);
-  assert.deepEqual(RaindownPlugin.rewriteArgs('/v/note.md', { bare: true }), ['/v/note.md', '--stdin', '--rewrite', '--bare']);
-  assert.equal(RaindownPlugin.expandCommand('~/bin/raindown'), path.join(os.homedir(), 'bin/raindown'));
-});
-
-test('writes back to the note, and not again for the save that makes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
+test('writes back to the note, by its path in the vault, and not again for the save that makes', async () => {
   const content = '# A\n\n<!-- toc: -->\n<!-- :toc -->\n';
-  const { raindown, file, current } = await plugin({ dir, content, command: fakeRaindown(dir, FILL_TOC) });
+  const { raindown, engine, file, current } = await plugin({ content });
 
   await raindown.writeBack(file);
   assert.equal(current(), '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n');
+  assert.deepEqual(engine.asked, [{ path: 'note.md', markdown: content, bare: false }]);
 
-  raindown.settings.command = '/nowhere/raindown';
   await raindown.writeBack(file);
+  assert.equal(engine.asked.length, 1);
   assert.equal(raindown.status.text, '');
 });
 
 test('keeps what was typed while Raindown ran', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const typed = '# A\n\n<!-- toc: -->\n<!-- :toc -->\n\nMore\n';
-  const { raindown, file, current } = await plugin({ dir, content: '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', typed, command: fakeRaindown(dir, FILL_TOC) });
+  const { raindown, file, current } = await plugin({ content: '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', typed });
 
   await raindown.writeBack(file);
   assert.equal(current(), typed);
 });
 
+test("sends Raindown each file added, renamed or removed once the vault's loaded, with a folder's files", async () => {
+  const handlers = {};
+  const sent = [];
+  const engine = { ...fakeEngine(), fileChanged: (file) => sent.push(['changed', file]), fileRemoved: (file) => sent.push(['removed', file]) };
+  const app = {
+    vault: { on: (event, handler) => { handlers[event] = handler; } },
+    workspace: { onLayoutReady: (ready) => ready(), on: () => {}, getLeavesOfType: () => [] }
+  };
+  const raindown = new RaindownPlugin(app);
+  raindown.loadData = async () => ({ writeBack: false }); // So Raindown isn't started.
+  await raindown.onload();
+  raindown.engine = engine;
+
+  handlers.create({ path: 'notes', children: [{ path: 'notes/a.md' }] });
+  handlers.rename({ path: 'b.md' }, 'a.md');
+  handlers.delete({ path: 'c.csv' });
+  handlers.modify({ path: 'd.csv', extension: 'csv' });
+  assert.deepEqual(sent, [['changed', 'notes'], ['changed', 'notes/a.md'], ['removed', 'a.md'], ['changed', 'b.md'], ['removed', 'c.csv'], ['changed', 'd.csv']]);
+});
+
 test("shows Raindown's errors in the status bar, and in a notice from a command", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const command = fakeRaindown(dir, "process.stderr.write('raindown: note.md: Missing end tag\\n'); process.exit(1);");
-  const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command });
+  const engine = fakeEngine(() => { throw new Error('/vault/note.md: Missing end tag'); });
+  const { raindown, file } = await plugin({ content: '<!-- toc: -->\n', engine });
 
   await raindown.writeBack(file);
-  assert.equal(raindown.status.text, 'Raindown: note.md: Missing end tag');
+  assert.equal(raindown.status.text, 'Raindown: Missing end tag');
 
   await raindown.writeBack(file, { notify: true });
-  assert.equal(Notice.messages.at(-1), 'note.md: Missing end tag');
+  assert.equal(Notice.messages.at(-1), 'Missing end tag');
 
-  raindown.settings.command = fakeRaindown(dir, "process.stderr.write('Unknown arguments: note.md --stdin --rewrite\\n'); process.exit(1);");
-  await raindown.writeBack(file, { notify: true });
-  assert.match(Notice.messages.at(-1), /^This Raindown is too old/);
-
-  raindown.settings.command = fakeRaindown(dir, '');
+  raindown.engine = fakeEngine(() => ({ output: '', warnings: [] }));
   await raindown.writeBack(file, { notify: true });
   assert.equal(Notice.messages.at(-1), "Raindown didn't print the note back, so it's left as it is");
-
-  raindown.settings.command = '/nowhere/raindown';
-  await raindown.writeBack(file, { notify: true });
-  assert.match(Notice.messages.at(-1), /^Couldn't run "\/nowhere\/raindown"/);
-});
-
-test("shows how to install Raindown once, when it can't be found", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command: '/nowhere/raindown' });
-
-  const opened = Modal.opened.length;
-  await raindown.writeBack(file, { notify: true });
-  await raindown.writeBack(file, { notify: true });
-  assert.equal(Modal.opened.length - opened, 1);
-});
-
-test('finds Raindown once it has been installed, and starts a new server for it', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command: '/nowhere/raindown' });
-  await raindown.writeBack(file, { notify: true });
-  const { check } = Modal.opened.at(-1);
-  const stale = raindown.server;
-
-  assert.equal(await check(), false);
-  const found = fakeRaindown(dir, FILL_TOC);
-  process.env.SHELL = fakeShell(found);
-  assert.equal(await check(), true);
-  process.env.SHELL = fakeShell('');
-
-  assert.equal(raindown.settings.command, found);
-  assert.notEqual(raindown.server, stale);
-});
-
-test("uses Raindown from the shell's PATH when Obsidian can't find it", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const found = fakeRaindown(dir, FILL_TOC);
-  const { raindown, file, current } = await plugin({ dir, content: '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', command: 'raindown-nowhere' });
-
-  process.env.SHELL = fakeShell(found);
-  await raindown.writeBack(file);
-  process.env.SHELL = fakeShell('');
-
-  assert.equal(raindown.settings.command, found);
-  assert.equal(current(), '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n');
-  assert.equal(raindown.status.text, '');
-});
-
-test("doesn't use a Raindown from the shell's PATH that doesn't run", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: '<!-- toc: -->\n', command: 'raindown-nowhere' });
-
-  process.env.SHELL = fakeShell(fakeRaindown(dir, 'process.exit(1);'));
-  await raindown.writeBack(file);
-  process.env.SHELL = fakeShell('');
-
-  assert.equal(raindown.settings.command, 'raindown-nowhere');
 });
 
 test('changes an open note in its editor, with unsaved typing, only where it changed', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const editor = fakeEditor('# A\n\n<!-- toc: -->\n<!-- :toc -->\n\nTyped, not saved\n');
-  const { raindown, file, current } = await plugin({ dir, content: '# A\n', command: fakeRaindown(dir, FILL_TOC), editor });
+  const { raindown, file, current } = await plugin({ content: '# A\n', editor });
 
   await raindown.writeBack(file);
   assert.equal(editor.text, '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n\nTyped, not saved\n');
@@ -247,39 +165,131 @@ test('changes an open note in its editor, with unsaved typing, only where it cha
   assert.deepEqual(RaindownPlugin.changedRange('aa', 'aaa'), { from: 2, to: 2, text: 'a' });
 });
 
-test('compares versions', () => {
-  assert.ok(RaindownPlugin.isOlder('0.11.0', '0.15.0'));
-  assert.ok(RaindownPlugin.isOlder('0.9.9\n', '0.15.0'));
-  assert.ok(!RaindownPlugin.isOlder('0.15.0', '0.15.0'));
-  assert.ok(!RaindownPlugin.isOlder('1.0', '0.15.0'));
-  assert.ok(!RaindownPlugin.isOlder('0.18.0', '0.15.0'));
-  assert.ok(RaindownPlugin.isOlder('0.17.2', '0.18.0'));
+// A stand-in for the worker that runs Raindown, keeping what it's sent and answering as the function does, or not at all.
+function fakeWorker(answer) {
+  return class {
+    static made = [];
+
+    constructor() {
+      this.sent = [];
+      this.constructor.made.push(this);
+    }
+
+    postMessage(message) {
+      this.sent.push(message);
+      const answered = message.id && answer(message);
+      if (answered) setTimeout(() => this.onmessage({ data: { id: message.id, ...answered } }), 0);
+    }
+
+    terminate() { this.terminated = true; }
+  };
+}
+
+// A vault of the files, by path, as Obsidian's API has it, with what's made through the vault rather than its adapter.
+function fakeVault(files) {
+  const mtimes = {};
+  const made = [];
+  const decode = (bytes) => new TextDecoder().decode(bytes);
+  const under = (folder) => Object.keys(files).filter((file) => !folder || file.startsWith(`${folder}/`));
+  const vault = {
+    configDir: '.obsidian',
+    adapter: {
+      list: async (folder) => {
+        const depth = folder ? folder.split('/').length + 1 : 1;
+        const paths = under(folder).map((file) => file.split('/').slice(0, depth).join('/'));
+        return { files: paths.filter((p) => p in files), folders: [...new Set(paths.filter((p) => !(p in files)))] };
+      },
+      stat: async (file) => (file in files ? { size: files[file].length, mtime: mtimes[file] ?? 1 } : null),
+      readBinary: async (file) => new TextEncoder().encode(files[file]).buffer,
+      exists: async (file) => file in files || under(file).length > 0,
+      mkdir: async () => {},
+      writeBinary: async (file, bytes) => { files[file] = decode(bytes); }
+    },
+    getAbstractFileByPath: (file) => (file in files ? { path: file } : null),
+    modifyBinary: async ({ path: file }, bytes) => { files[file] = decode(bytes); },
+    createBinary: async (file, bytes) => { made.push(file); files[file] = decode(bytes); }
+  };
+  return { vault, files, mtimes, made };
+}
+
+function fakeRuntime() {
+  return { wasm: 'AA==', worker: '', loadPaths: ['/engine'] };
+}
+
+const bytes = (text) => new TextEncoder().encode(text);
+
+test("sends Raindown the vault's files it reads as it starts, with the front matter Obsidian's read, leaving out others", async () => {
+  const { vault } = fakeVault({
+    'note.md': '# A', 'data/a.csv': 'a', '.raindown/shout.rb': 'class Shout', '.obsidian/app.json': '{}', '.git/HEAD.md': 'x', 'a.png': 'png'
+  });
+  const Worker = fakeWorker(() => ({ ready: true }));
+  const metadataCache = { getCache: (file) => (file === 'note.md' ? { frontmatter: { tags: ['a'] } } : null) };
+  const engine = new RaindownEngine({ vault, metadataCache }, { runtime: fakeRuntime, Worker });
+
+  await engine.start();
+  const [{ type, files, loadPaths, frontMatters }] = Worker.made[0].sent;
+  assert.deepEqual([type, files.map(([file]) => file).sort(), loadPaths], ['start', ['.raindown/shout.rb', 'data/a.csv', 'note.md'], ['/engine']]);
+  assert.deepEqual(frontMatters, { 'note.md': { tags: ['a'] } });
+
+  await engine.fileChanged('notes/b.md');
+  await engine.fileChanged('a.png');
+  engine.fileRemoved('note.md');
+  await new Promise((done) => { setTimeout(done, 0); });
+  assert.deepEqual(Worker.made[0].sent.slice(1).map(({ changed, removed }) => [changed?.map(([file]) => file), removed]), [
+    [[], undefined], [undefined, ['note.md']]
+  ]);
 });
 
-test('shows how to update an old Raindown, once until another is found', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown } = await plugin({ dir, content: '', command: 'raindown' });
-  const opened = Modal.opened.length;
+test('writes the files Raindown wrote to the vault, and hidden ones through its adapter', async () => {
+  const { vault, files, made } = fakeVault({ 'note.md': '# A', 'data.csv': 'a' });
+  const written = [['data.csv', bytes('b')], ['new/c.csv', bytes('c')], ['.raindown/data/d.csv', bytes('d')]];
+  const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : { output: '# A', warnings: [], written }));
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
 
-  raindown.checkVersion('0.18.0');
-  raindown.checkVersion('0.17.0');
-  raindown.checkVersion('0.11.0');
-  assert.equal(Modal.opened.length - opened, 1);
-  assert.equal(Modal.opened.at(-1).wording().title, 'Update Raindown');
-
-  await raindown.useRaindown('raindown');
-  raindown.checkVersion('0.11.0');
-  assert.equal(Modal.opened.length - opened, 2);
+  const answer = await engine.rewrite({ path: 'note.md', markdown: '# A', bare: false }, { timeout: 1000 });
+  assert.equal(answer.output, '# A');
+  assert.deepEqual([files['data.csv'], files['new/c.csv'], files['.raindown/data/d.csv'], made], ['b', 'c', 'd', ['new/c.csv']]);
+  assert.deepEqual(Worker.made[0].sent[1], { id: 2, type: 'rewrite', path: 'note.md', markdown: '# A', bare: false });
 });
 
-test('offers the install command for the computer', () => {
-  assert.equal(RaindownPlugin.installCommand('darwin'), 'curl -fsSL https://raindown.dev/install.sh | sh');
-  assert.equal(RaindownPlugin.installCommand('linux'), 'curl -fsSL https://raindown.dev/install.sh | sh');
-  assert.equal(RaindownPlugin.installCommand('win32'), 'irm https://raindown.dev/install.ps1 | iex');
+test('starts Raindown again when a file in a .raindown folder changes, so its nodes load again', async () => {
+  const { vault, files, mtimes } = fakeVault({ 'note.md': '# A', '.raindown/shout.rb': 'class Shout' });
+  const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : { output: '', warnings: [], written: [] }));
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
+  const rewrite = () => engine.rewrite({ path: 'note.md', markdown: '' }, { timeout: 1000 });
+
+  await rewrite();
+  await rewrite();
+  assert.equal(Worker.made.length, 1);
+
+  mtimes['.raindown/shout.rb'] = 2;
+  await rewrite();
+  files['.raindown/whisper.md'] = 'quiet';
+  await rewrite();
+  assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, true, false]);
 });
 
-test('looks for the standalone binary where it is usually installed', () => {
-  assert.equal(RaindownPlugin.binaryPath('darwin'), path.join(process.env.HOME, '.local', 'bin', 'raindown'));
+test("stops Raindown when it doesn't answer in time, and starts it again for the next note", async () => {
+  const { vault } = fakeVault({ 'note.md': '# A' });
+  let answers = false;
+  const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : answers && { output: 'B', warnings: [], written: [] }));
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
+  const rewrite = () => engine.rewrite({ path: 'note.md', markdown: '# A' }, { timeout: 20 });
+
+  await assert.rejects(rewrite(), /^Error: Raindown didn't answer within 0.02 seconds$/);
+  answers = true;
+  assert.equal((await rewrite()).output, 'B');
+  assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, false]);
+});
+
+test("says Raindown's error, and why it couldn't start", async () => {
+  const { vault } = fakeVault({ 'note.md': '# A' });
+  const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : { error: '/vault/note.md: Missing end tag' }));
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
+  await assert.rejects(engine.rewrite({ path: 'note.md', markdown: '' }, { timeout: 1000 }), /Missing end tag/);
+
+  const broken = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker: fakeWorker(() => ({ error: 'no WebAssembly' })) });
+  await assert.rejects(broken.rewrite({ path: 'note.md', markdown: '' }, { timeout: 1000 }), /^Error: no WebAssembly$/);
 });
 
 function highlighted(text, options) {
@@ -308,9 +318,8 @@ test('highlights bare directives only where they write back, and not in code or 
 });
 
 test('writes back every note with directives, and says how many changed', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const notes = { 'a.md': '# A\n\n<!-- toc: -->\n<!-- :toc -->\n', 'b.md': '# B\n', 'c.md': '# C\n\n<!-- list: -->\n' };
-  const { raindown } = await plugin({ dir, content: '', command: fakeRaindown(dir, FILL_TOC) });
+  const { raindown } = await plugin();
   const files = Object.keys(notes).map((name) => ({ path: name, extension: 'md' }));
   Object.assign(raindown.app.vault, {
     getMarkdownFiles: () => files,
@@ -329,22 +338,14 @@ test("finds the line of Raindown's error, to underline it", () => {
   assert.equal(RaindownPlugin.errorLine('raindown: n.md: wrong number of arguments'), null);
 });
 
-test("picks a section's HTML out of the whole note's, for reading view", () => {
-  const marked = RaindownPlugin.markSection('# A\n<{ :toc }>\n## B', 1, 1);
-  assert.equal(marked, '# A\n\n<!-- raindown:section -->\n\n<{ :toc }>\n\n<!-- raindown:end-section -->\n\n## B');
-  assert.equal(RaindownPlugin.sectionHtml('<h1>A</h1>\n<!-- raindown:section -->\n<ul></ul>\n<!-- raindown:end-section -->\n'), '\n<ul></ul>\n');
-  assert.equal(RaindownPlugin.sectionHtml('<h1>A</h1>'), null);
-});
-
 test("completes directive names, with the project's own nodes", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown } = await plugin({ dir, content: '', command: 'raindown' });
+  const { raindown } = await plugin();
   raindown.app.vault.adapter = {
     exists: async (folder) => folder === '.raindown',
     list: async () => ({ files: ['.raindown/BookCard.md', '.raindown/Changelog.rb', '.raindown/config.yml'] })
   };
   raindown.app.metadataCache = { getFileCache: () => ({ frontmatter: { raindown: true } }) };
-  const suggest = new (require('../main').DirectiveSuggest)(raindown.app, raindown);
+  const suggest = new (RaindownPlugin.DirectiveSuggest)(raindown.app, raindown);
   const editor = (line) => ({ getLine: () => line });
   const note = { path: 'notes/a.md', parent: { path: 'notes' } };
 
@@ -356,31 +357,8 @@ test("completes directive names, with the project's own nodes", async () => {
   assert.deepEqual(await suggest.getSuggestions({ query: 'ta', file: note }), ['table']);
 });
 
-test('writes back through the server, and keeps each reading view section until the note changes', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const server = fakeServer(dir);
-  const content = '# A\n\n<!-- toc: -->\n<!-- :toc -->\n';
-  const { raindown, file, current } = await plugin({ dir, content, command: server.command });
-  raindown.app.vault.getAbstractFileByPath = () => file;
-
-  await raindown.writeBack(file);
-  assert.equal(current(), '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n');
-
-  const shown = [];
-  const section = (text) => ({ sourcePath: 'note.md', getSectionInfo: () => ({ text, lineStart: 2, lineEnd: 2 }) });
-  const el = { replaceChildren: (html) => shown.push(html) };
-  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n'));
-  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n'));
-  await raindown.renderSection(el, section('# A\n\n<{ :toc }>\n\n## B\n'));
-
-  assert.deepEqual(shown, ['<ul></ul>', '<ul></ul>', '<ul></ul>']);
-  assert.deepEqual(server.requests(), ['rewrite', 'render', 'render']);
-  raindown.onunload();
-});
-
 test("doesn't write back lists after it's unloaded", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown' });
+  const { raindown, file } = await plugin();
   let writtenBack = false;
   raindown.writeBackAll = async () => { writtenBack = true; };
 
@@ -392,8 +370,7 @@ test("doesn't write back lists after it's unloaded", async () => {
 });
 
 test('writes back a note with only bare directives when Bare syntax is on', async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: '# A\n\ntoc:\n', command: 'raindown' });
+  const { raindown, file } = await plugin({ content: '# A\n\ntoc:\n' });
   let asked = 0;
   raindown.raindown = async ({ markdown }) => { asked += 1; return { output: markdown, warnings: '' }; };
 
@@ -402,35 +379,6 @@ test('writes back a note with only bare directives when Bare syntax is on', asyn
   await raindown.writeBack(file, { force: true });
 
   assert.equal(asked, 1);
-});
-
-test('gives a new server longer for its first answer than the ones after', async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown-slow');
-  fs.writeFileSync(file, `#!/usr/bin/env node
-console.log(JSON.stringify({ ready: true }));
-let first = true;
-process.stdin.on('data', (chunk) => {
-  const { id } = JSON.parse(chunk);
-  setTimeout(() => console.log(JSON.stringify({ id, output: '' })), first ? 300 : 0);
-  first = false;
-});
-`, { mode: 0o755 });
-  const server = new RaindownPlugin.RaindownServer(file);
-
-  assert.equal((await server.request({ path: 'note.md', markdown: '' }, { timeout: 100 })).output, '');
-  assert.equal((await server.request({ path: 'note.md', markdown: '' }, { timeout: 100 })).output, '');
-  server.stop();
-});
-
-test("says why Raindown's server stopped", async () => {
-  const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-')), 'raindown-crash');
-  fs.writeFileSync(file, `#!/usr/bin/env node
-console.log(JSON.stringify({ ready: true }));
-process.stdin.on('data', () => { process.stderr.write('raindown: server: boom\\n'); process.exit(1); });
-`, { mode: 0o755 });
-  const server = new RaindownPlugin.RaindownServer(file);
-
-  await assert.rejects(server.request({ path: 'note.md', markdown: '' }, { timeout: 5000 }), /^Error: Raindown stopped: raindown: server: boom$/);
 });
 
 test("keeps what it writes back out of the editor's undo history", () => {
@@ -461,8 +409,7 @@ test("finds each table's file, where its line ends, and not in code or another d
 });
 
 test("opens a table's file from the project, and says when it isn't there yet", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown } = await plugin({ dir, content: '', command: 'raindown' });
+  const { raindown } = await plugin();
   const existing = new Set(['notes/.raindown', 'notes/data/books.csv']);
   raindown.app.vault.adapter.exists = async (found) => existing.has(found);
   const opened = [];
@@ -477,11 +424,9 @@ test("opens a table's file from the project, and says when it isn't there yet", 
   assert.equal(await raindown.projectRoot({ parent: { path: 'elsewhere' } }), '');
 });
 
-test("shows Raindown's messages without the note's path, and others' from the vault", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'Google Drive-'));
-  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown' });
-  const note = path.join(dir, 'note.md');
-  const message = `raindown: ${note}: <!-- toc: --> on line 3 needs <!-- :toc -->\nraindown: ${path.join(dir, 'notes', 'Bad.md')}: bad YAML`;
+test("shows Raindown's messages without the note's path, and others' from the vault's", async () => {
+  const { raindown, file } = await plugin();
+  const message = '/vault/note.md: <!-- toc: --> on line 3 needs <!-- :toc -->\n/vault/notes/Bad.md: bad YAML';
 
   assert.equal(raindown.shortMessage(message, file), '<!-- toc: --> on line 3 needs <!-- :toc -->\nnotes/Bad.md: bad YAML');
   assert.equal(raindown.shortMessage('', file), '');
@@ -503,9 +448,8 @@ test("knows when the cursor's on a directive's line", () => {
 });
 
 test("waits to write back while the cursor's on a directive's line, then writes back once it leaves", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const editor = fakeEditor("# A\n<!-- table: 'rtest.csv' -->\n<!-- :table -->\n");
-  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown', editor });
+  const { raindown, file } = await plugin({ content: '', editor });
   const asked = [];
   raindown.raindown = async ({ markdown }) => { asked.push(markdown); return { output: markdown, warnings: '' }; };
   const written = [];
@@ -527,9 +471,8 @@ test("waits to write back while the cursor's on a directive's line, then writes 
 });
 
 test("writes back on Enter on a held directive's line, and leaves Enter alone elsewhere", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
   const editor = fakeEditor("# A\n<!-- table: 'abc/test.csv' -->\n<!-- :table -->\n");
-  const { raindown, file } = await plugin({ dir, content: '', command: 'raindown', editor });
+  const { raindown, file } = await plugin({ content: '', editor });
   const asked = [];
   raindown.raindown = async ({ markdown }) => { asked.push(markdown); return { output: markdown, warnings: '' }; };
 
@@ -545,8 +488,7 @@ test("writes back on Enter on a held directive's line, and leaves Enter alone el
 });
 
 test("underlines the line of a directive Raindown couldn't run, while writing back the rest", async () => {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-'));
-  const { raindown, file } = await plugin({ dir, content: "<!-- toc: extra -->\n<!-- :toc -->\n", command: 'raindown' });
+  const { raindown, file } = await plugin({ content: "<!-- toc: extra -->\n<!-- :toc -->\n" });
   raindown.raindown = async ({ markdown }) => ({ output: markdown, warnings: "line 1: toc: takes no value, so it can't read \"extra\"" });
 
   await raindown.writeBack(file, { force: true });

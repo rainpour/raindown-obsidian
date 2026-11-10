@@ -5,7 +5,6 @@ A [Markdown superset](https://raindown.dev/) where data stays current and reads 
 ## Features
 
 - **Portable** - Everyone sees the same thing with or without Raindown/Obsidian, on mobile, desktop and web
-- [**Endpoints**](https://raindown.dev/docs/endpoint) - Make HTTP requests to APIs and document their responses
 - **Nodes** - [table](https://raindown.dev/docs/table), [toc](https://raindown.dev/docs/toc), [chart](https://raindown.dev/docs/chart), [list](https://raindown.dev/docs/list), [schema](https://raindown.dev/docs/schema)
 - [**Components**](https://raindown.dev/docs/components) - Create your own custom business logic and output
 - **Multi-modal** - [3 input modes](https://raindown.dev/docs/directives) and 2 output modes per component

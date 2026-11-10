@@ -1,0 +1,129 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with the Ruby files it loads into
+# ruby.wasm's module, Ruby compiled to WebAssembly, gzipped, in base64, with ruby.wasm's browser bundle and the worker
+# that runs it.
+#   1. scripts/trace.rb writes back a sample vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
+#      lists the standard library files and gems that loaded, in build/loaded.json.
+#   2. Those files, and src/engine.rb, are copied into build/root, as they'll be inside Ruby: the standard library at
+#      /usr/local/lib/ruby, each gem at /gems/NAME and the engine at /engine.
+#   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
+#      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
+#   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm.
+# ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM.
+#   gem install ruby_wasm
+#   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
+require 'fileutils'
+require 'json'
+require 'zlib'
+
+RUBY_WASM_VERSION = '2.10.1'
+ROOT = File.expand_path('..', __dir__)
+BUILD = File.join(ROOT, 'build')
+STAGE = File.join(BUILD, 'root')
+RAINDOWN = File.expand_path(ENV.fetch('RAINDOWN_DIR', '../raindown'), ROOT)
+# The gems' Ruby, from Raindown's own, which mise gives it, and rbwasm, installed into it.
+BUNDLED = %w[mise exec -- bundle exec].freeze
+
+def run(*command, chdir: ROOT)
+  system(*command, chdir:, exception: true)
+end
+
+# The folder a release is extracted into in build/runtime, downloaded the first time.
+def runtime(name, url)
+  folder = File.join(BUILD, 'runtime', name)
+  return folder if File.directory?(folder)
+
+  FileUtils.mkdir_p(folder)
+  run("curl -fsSL #{url} | tar -xz -C #{folder}")
+  folder
+end
+
+def ruby_wasi
+  ENV['RUBY_WASI'] || File.join(runtime('wasi', "https://github.com/ruby/ruby.wasm/releases/download/#{RUBY_WASM_VERSION}/" \
+                                                 'ruby-3.4-wasm32-unknown-wasip1-full.tar.gz'), 'ruby-3.4-wasm32-unknown-wasip1-full')
+end
+
+def ruby_npm
+  ENV['RUBY_NPM'] || File.join(runtime('npm', "https://registry.npmjs.org/@ruby/3.4-wasm-wasi/-/3.4-wasm-wasi-#{RUBY_WASM_VERSION}.tgz"),
+                               'package', 'dist')
+end
+
+def copy(from, to)
+  FileUtils.mkdir_p(File.dirname(to))
+  FileUtils.cp_r(from, to)
+end
+
+# 1. What loads.
+loaded_file = File.join(BUILD, 'loaded.json')
+FileUtils.mkdir_p(BUILD)
+run(*BUNDLED, 'ruby', '-rrbconfig', '-I', File.join(ROOT, 'src'), File.join(ROOT, 'scripts', 'trace.rb'), loaded_file, chdir: RAINDOWN)
+loaded = JSON.parse(File.read(loaded_file))
+
+# 2. Staged as inside Ruby.
+FileUtils.rm_rf(STAGE)
+stdlib = File.join(ruby_wasi, 'usr', 'local', 'lib', 'ruby', '3.4.0')
+loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(STAGE, 'usr', 'local', 'lib', 'ruby', '3.4.0', it)) }
+load_paths = ['/engine']
+loaded['gems'].each do |name, gem|
+  # Gem data, like unicode-display_width's tables, is beside its code.
+  (gem['require_paths'] + ['data']).uniq.each do |folder|
+    next unless File.directory?(File.join(gem['root'], folder))
+
+    copy(File.join(gem['root'], folder), File.join(STAGE, 'gems', name, folder))
+  end
+  load_paths.concat(gem['require_paths'].map { "/gems/#{name}/#{it}" })
+end
+%w[engine.rb bytecode.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
+
+# 3. Bytecode, with build/root as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest are
+# rarely loaded, and they're compiled from source when they are.
+folders = %w[usr gems engine]
+if ENV['WASMTIME']
+  compiled = loaded['stdlib'].map { "/usr/local/lib/ruby/3.4.0/#{it}" } + ['/engine/engine.rb'] +
+             loaded['gems'].flat_map { |name, gem| gem['files'].map { "/gems/#{name}/#{it}" } }
+  File.write(File.join(BUILD, 'compile.txt'), compiled.join("\n"))
+  run(ENV['WASMTIME'], 'run', '--dir', "#{STAGE}::/", '--dir', "#{File.join(ROOT, 'scripts')}::/scripts",
+      '--dir', "#{BUILD}::/build", File.join(ruby_wasi, 'usr', 'local', 'bin', 'ruby'), '--disable-gems',
+      '/scripts/compile.rb', '/bytecode', '/build/compile.txt')
+  folders << 'bytecode'
+end
+
+# 4. Packed.
+wasm = File.join(BUILD, 'raindown.wasm')
+run(*BUNDLED.first(3), 'rbwasm', 'pack', File.join(ruby_npm, 'ruby.wasm'), '-o', wasm,
+    *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] }, chdir: RAINDOWN)
+
+# main.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
+# WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
+browser = File.read(File.join(ruby_npm, 'browser.umd.js'))
+browser = browser.sub('exports.DefaultRubyVM = DefaultRubyVM;') do
+  'exports.DefaultRubyVM = DefaultRubyVM; Object.assign(exports, { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory });'
+end
+abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" unless browser.include?('Object.assign(exports, { RubyVM')
+runtime = { wasm: [Zlib.gzip(File.binread(wasm), level: 9)].pack('m0'),
+            worker: "#{browser}\n#{File.read(File.join(ROOT, 'src', 'worker.js'))}", loadPaths: load_paths }
+sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
+            './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
+            './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js')) }
+modules = sources.map { |name, code| "#{JSON.generate(name)}: function (module, exports, require) {\n#{code}\n}" }
+File.write(File.join(ROOT, 'main.js'), <<~JS)
+  'use strict';
+
+  // Built by bin/build from src/, with Raindown packed into Ruby compiled to WebAssembly. Edit src/, rather than this.
+  const sources = {
+  #{modules.join(",\n")}
+  };
+  const loaded = {};
+  function load(name) {
+    if (!sources[name]) return require(name);
+    if (!loaded[name]) {
+      loaded[name] = { exports: {} };
+      sources[name](loaded[name], loaded[name].exports, load);
+    }
+    return loaded[name].exports;
+  }
+  module.exports = load('./plugin');
+JS
+puts format('Built main.js: %.1f MB, with Raindown packed into %.1f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)

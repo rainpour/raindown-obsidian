@@ -1,2 +1,5 @@
 # Obsidian saves the plugin's settings here when the folder is linked into a vault.
 data.json
+
+# bin/build's downloads, what it packs, and the module.
+build/
