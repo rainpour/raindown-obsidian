@@ -1,7 +1,7 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with the Ruby files it loads into
+# Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with only the Ruby files it loads into
 # ruby.wasm's module, Ruby compiled to WebAssembly, gzipped, in base64, with ruby.wasm's browser bundle and the worker
 # that runs it.
 #   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
@@ -68,12 +68,10 @@ stdlib = File.join(ruby_wasi, 'usr', 'local', 'lib', 'ruby', '3.4.0')
 loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(STAGE, 'usr', 'local', 'lib', 'ruby', '3.4.0', it)) }
 load_paths = ['/engine']
 loaded['gems'].each do |name, gem|
-  # Gem data, like unicode-display_width's tables, is beside its code.
-  (gem['require_paths'] + ['data']).uniq.each do |folder|
-    next unless File.directory?(File.join(gem['root'], folder))
-
-    copy(File.join(gem['root'], folder), File.join(STAGE, 'gems', name, folder))
-  end
+  # Only the files that loaded, and gem data, like unicode-display_width's tables, beside its code.
+  gem['files'].each { copy(File.join(gem['root'], it), File.join(STAGE, 'gems', name, it)) }
+  data = File.join(gem['root'], 'data')
+  copy(data, File.join(STAGE, 'gems', name, 'data')) if File.directory?(data)
   load_paths.concat(gem['require_paths'].map { "/gems/#{name}/#{it}" })
 end
 %w[engine.rb bytecode.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
