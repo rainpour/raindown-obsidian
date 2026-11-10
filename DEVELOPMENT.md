@@ -17,7 +17,9 @@ gem install ruby_wasm
 WASMTIME=~/.wasmtime/bin/wasmtime bin/build
 ```
 
-`scripts/trace.rb` writes back a sample vault with each of Raindown's directives, and lists the Ruby files that loaded, so only those are packed. A directive that loads a file the sample doesn't would fail in the plugin, so give the sample a note using it.
+`scripts/trace.rb` writes back `test/vault`, with a note for each of Raindown's directives, and lists the Ruby files that loaded, so only those are packed. A directive that loads a file the vault doesn't would fail in the plugin, so give the vault a note using it.
+
+Once `main.js` is built, `scripts/smoke.js` runs its worker, with Raindown in WebAssembly, in Node, on a copy of `test/vault`, and fails the build unless each note's written back as native Raindown wrote it in `scripts/trace.rb`. So a file missing from the module, or a ruby.wasm update that breaks the worker, is caught before a release. Run it again on its own with `node scripts/smoke.js`.
 
 ## Testing
 

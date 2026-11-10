@@ -1,0 +1,2 @@
+<!-- chart: 'data.csv' -->
+<!-- :chart -->

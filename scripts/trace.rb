@@ -1,8 +1,8 @@
 # frozen_string_literal: true
 
-# Writes back a vault of notes using each of Raindown's directives, and a project node in Ruby and in Markdown, then
-# lists every Ruby file that loaded, in build/loaded.json, for bin/build to pack into the WebAssembly module and no more:
-# the standard library's, by their paths in its folder, with this Ruby's platform folder as WebAssembly's, and each
+# Writes back test/vault, with notes using each of Raindown's directives, and a project node in Ruby and in Markdown,
+# then lists, in build/loaded.json, its answers, for scripts/smoke.js to check the plugin's against, and every Ruby file
+# that loaded, for bin/build to pack into the WebAssembly module and no more: the standard library's, by their paths in its folder, with this Ruby's platform folder as WebAssembly's, and each
 # gem's folder, load paths and the files that loaded from it. Run natively, from a Raindown checkout, as bin/build does:
 #   bundle exec ruby -rrbconfig -I PLUGIN/src PLUGIN/scripts/trace.rb PLUGIN/build/loaded.json
 # Bundler only finds the gems. Then it runs again without Bundler or RubyGems, from the gems' folders, as Ruby does in
@@ -10,30 +10,17 @@
 require 'tmpdir'
 require 'engine'
 
-NOTES = {
-  'toc.md' => "# Notes\n\n<!-- toc: -->\n<!-- :toc -->\n\n## One\n\n## Two\n",
-  'list.md' => "<!-- list: folder: 'notes' -->\n<!-- :list -->\n",
-  'notes/a.md' => "---\ntags: [a]\n---\n\n# A\n",
-  'table.md' => "<!-- table: 'data.csv' -->\n<!-- :table -->\n",
-  'chart.md' => "<!-- chart: 'data.csv' -->\n<!-- :chart -->\n",
-  'bare.md' => "---\nraindown: true\n---\n\ntoc:\n\n# Bare\n\nShout:\n",
-  'nodes.md' => "<!-- Shout: -->\n<!-- :Shout -->\n\n<!-- Whisper: -->\n<!-- :Whisper -->\n",
-  'data.csv' => "Item,Cost\nMilk,54\nEggs,68\n",
-  '.raindown/shout.rb' => "class Shout < Raindown::Node\n  def rewrite = 'Loud'\nend\n",
-  '.raindown/whisper.md' => "quiet\n",
-  '.obsidian/app.json' => "{}\n"
-}.freeze
+VAULT = File.expand_path('../test/vault', __dir__)
 
-Dir.mktmpdir do |vault|
-  NOTES.each do |path, text|
-    FileUtils.mkdir_p(File.dirname(File.join(vault, path)))
-    File.write(File.join(vault, path), text)
-  end
+# Native Raindown's answers, by each note's path, which scripts/smoke.js checks the plugin's match.
+answers = Dir.mktmpdir do |vault|
+  FileUtils.cp_r("#{VAULT}/.", vault)
   request = File.join(vault, 'request.json')
-  NOTES.each_key.select { it.end_with?('.md') }.each do |path|
-    File.write(request, JSON.generate(path: File.join(vault, path), markdown: NOTES[path]))
+  Dir.glob('**/*.md', base: VAULT).sort.to_h do |path|
+    File.write(request, JSON.generate(path: File.join(vault, path), markdown: File.read(File.join(VAULT, path))))
     answer = JSON.parse(RaindownEngine.answer(request))
     abort "#{path}: #{answer['error']}" if answer['error']
+    [path, answer['output']]
   end
 end
 
@@ -57,6 +44,7 @@ gems = JSON.parse(ENV.fetch('RAINDOWN_TRACE_GEMS')).to_h do |name, gem|
   [name, gem.merge('files' => loaded.filter_map { it.delete_prefix("#{gem['root']}/") if it.start_with?("#{gem['root']}/") }.sort)]
 end
 File.write(ARGV.fetch(0), JSON.pretty_generate(
-  stdlib: stdlib.map { it.delete_prefix("#{lib}/").sub("#{RbConfig::CONFIG['arch']}/", 'wasm32-wasi/') }.sort, gems:
+  stdlib: stdlib.map { it.delete_prefix("#{lib}/").sub("#{RbConfig::CONFIG['arch']}/", 'wasm32-wasi/') }.sort, gems:,
+  answers:
 ))
 puts "#{stdlib.size} standard library files and #{gems.size} gems loaded"

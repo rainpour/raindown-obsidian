@@ -4,13 +4,14 @@
 # Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with the Ruby files it loads into
 # ruby.wasm's module, Ruby compiled to WebAssembly, gzipped, in base64, with ruby.wasm's browser bundle and the worker
 # that runs it.
-#   1. scripts/trace.rb writes back a sample vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
-#      lists the standard library files and gems that loaded, in build/loaded.json.
+#   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
+#      lists what it wrote and the standard library files and gems that loaded, in build/loaded.json.
 #   2. Those files, and src/engine.rb, are copied into build/root, as they'll be inside Ruby: the standard library at
 #      /usr/local/lib/ruby, each gem at /gems/NAME and the engine at /engine.
 #   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
 #   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm.
+#   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did.
 # ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM.
 #   gem install ruby_wasm
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
@@ -127,3 +128,4 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   module.exports = load('./plugin');
 JS
 puts format('Built main.js: %.1f MB, with Raindown packed into %.1f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
+run('node', File.join(ROOT, 'scripts', 'smoke.js'))
