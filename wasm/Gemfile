@@ -1,0 +1,8 @@
+# frozen_string_literal: true
+
+# What scripts/ruby_wasm.rb builds ruby.wasm's module with: rbwasm, and the js gem, whose extension lets Ruby call
+# JavaScript, as ruby.wasm's npm package's is built. Their versions are bin/build's RUBY_WASM_VERSION.
+source 'https://rubygems.org'
+
+gem 'js', '2.10.1'
+gem 'ruby_wasm', '2.10.1'

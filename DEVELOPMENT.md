@@ -10,12 +10,14 @@ WebAssembly has no processes or sockets, so Ruby waits on the worker, through ru
 
 ## Building
 
-Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`, which git ignores, as CI builds it for a release. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `rbwasm`, from the `ruby_wasm` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. It downloads ruby.wasm into `build/` the first time.
+Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`, which git ignores, as CI builds it for a release. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `wasm/Gemfile`'s gems, `rbwasm` and the `js` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. It downloads ruby.wasm into `build/` the first time.
 
 ```sh
-gem install ruby_wasm
+BUNDLE_GEMFILE=wasm/Gemfile bundle install
 WASMTIME=~/.wasmtime/bin/wasmtime bin/build
 ```
+
+Raindown's packed into a ruby.wasm module of the plugin's own, which `scripts/ruby_wasm.rb` builds the first time, as ruby.wasm's npm package builds its own, but with only the extensions Raindown and a vault's nodes use. It leaves out OpenSSL, as Obsidian makes the plugin's HTTPS requests, and WebAssembly has no sockets, and tools' extensions, like ripper. Building it compiles Ruby for WebAssembly, which takes a while, so it's kept in `build/runtime`, and CI caches it. It's built again when the script or `wasm/Gemfile.lock` changes. A vault's node that requires an extension that's left out fails to load it.
 
 `scripts/trace.rb` writes back `test/vault`, with a note for each of Raindown's directives, and lists the Ruby files that loaded, so only those are packed. A directive that loads a file the vault doesn't would fail in the plugin, so give the vault a note using it.
 

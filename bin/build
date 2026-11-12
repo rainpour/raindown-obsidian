@@ -10,13 +10,16 @@
 #      /usr/local/lib/ruby, each gem at /gems/NAME and the engine at /engine.
 #   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
-#   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm.
+#   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm. The module's
+#      built by scripts/ruby_wasm.rb the first time, with only the extensions Raindown uses, which takes a while.
 #   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did. It's
 #      skipped without Node, except in CI.
 # Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
-# ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM.
-#   gem install ruby_wasm
+# ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM, and its
+# module's built there, or is RUBY_WASM, with rbwasm and the js gem from wasm/Gemfile.
+#   BUNDLE_GEMFILE=wasm/Gemfile bundle install
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
+require 'digest'
 require 'fileutils'
 require 'json'
 require 'zlib'
@@ -36,6 +39,8 @@ def mise_exec
 end
 MISE = mise_exec.freeze
 BUNDLED = [*MISE, 'bundle', 'exec'].freeze
+# rbwasm and the js gem, at RUBY_WASM_VERSION, for building ruby.wasm's module and packing Raindown into it.
+WASM_GEMS = { 'BUNDLE_GEMFILE' => File.join(ROOT, 'wasm', 'Gemfile') }.freeze
 
 def run(*command, chdir: ROOT)
   system(*command, chdir:, exception: true)
@@ -54,6 +59,20 @@ end
 def ruby_wasi
   ENV['RUBY_WASI'] || File.join(runtime('wasi', "https://github.com/ruby/ruby.wasm/releases/download/#{RUBY_WASM_VERSION}/" \
                                                  'ruby-3.4-wasm32-unknown-wasip1-full.tar.gz'), 'ruby-3.4-wasm32-unknown-wasip1-full')
+end
+
+# ruby.wasm's module, built with only the extensions Raindown uses, named by what it's built from, so a change to them
+# builds it again.
+def ruby_module
+  return File.expand_path(ENV['RUBY_WASM']) if ENV['RUBY_WASM']
+
+  inputs = %w[scripts/ruby_wasm.rb wasm/Gemfile.lock].map { File.read(File.join(ROOT, it)) }.join
+  path = File.join(BUILD, 'runtime', "ruby-#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
+  return path if File.exist?(path)
+
+  FileUtils.mkdir_p(File.dirname(path))
+  run(WASM_GEMS.merge('RUBY_WASM_ROOT' => File.join(BUILD, 'ruby_wasm')), *BUNDLED, 'ruby', File.join(ROOT, 'scripts', 'ruby_wasm.rb'), path)
+  path
 end
 
 def ruby_npm
@@ -101,7 +120,7 @@ end
 
 # 4. Packed.
 wasm = File.join(BUILD, 'raindown.wasm')
-run(*MISE, 'rbwasm', 'pack', File.join(ruby_npm, 'ruby.wasm'), '-o', wasm,
+run(WASM_GEMS, *BUNDLED, 'rbwasm', 'pack', ruby_module, '-o', wasm,
     *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] }, chdir: RAINDOWN)
 
 # main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the

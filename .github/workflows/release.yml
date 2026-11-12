@@ -46,17 +46,18 @@ jobs:
         with:
           working-directory: build/raindown
       # Without checkouts of its sibling gems, like lowkey, Raindown's Gemfile takes them from RubyGems.
-      - name: Install Raindown's gems, and rbwasm
+      - name: Install Raindown's gems, and rbwasm's
         working-directory: build/raindown
         run: |
           bundle install
-          gem install ruby_wasm --no-document
+          BUNDLE_GEMFILE="$GITHUB_WORKSPACE/wasm/Gemfile" bundle install
       - uses: bytecodealliance/actions/wasmtime/setup@v1
-      # ruby.wasm's downloads, which bin/build names the version of.
+      # ruby.wasm's downloads, which bin/build names the version of, and the module scripts/ruby_wasm.rb builds, which
+      # takes a while.
       - uses: actions/cache@v5
         with:
           path: build/runtime
-          key: ruby-wasm-${{ hashFiles('bin/build') }}
+          key: ruby-wasm-${{ hashFiles('bin/build', 'scripts/ruby_wasm.rb', 'wasm/Gemfile.lock') }}
       - name: Build main.js, and run the smoke test
         run: RAINDOWN_DIR=build/raindown WASMTIME="$(which wasmtime)" bin/build
 
