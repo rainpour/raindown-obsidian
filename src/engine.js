@@ -50,7 +50,7 @@ class RaindownEngine {
   // Started once, and again after it's stopped, like when a .raindown folder changed, so its nodes load again.
   start() {
     this.starting ??= (async () => {
-      const { wasm, worker, loadPaths } = this.runtime();
+      const { wasm, wasmSize, worker, loadPaths } = this.runtime();
       const [files, nodes] = [[], new Map()];
       await this.readFolder('', files, nodes);
       this.nodes = nodes;
@@ -59,7 +59,7 @@ class RaindownEngine {
       this.worker.onerror = (event) => this.fail(new Error(`Raindown stopped: ${event.message}`));
       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vault = this.app.vault.getName?.() ?? '';
-      await this.ask({ type: 'start', wasm, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
     })();
     this.starting.catch(() => this.stop());
 

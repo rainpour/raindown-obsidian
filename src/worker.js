@@ -49,11 +49,11 @@ async function answer(data) {
   }
 }
 
-// The module's compressed with xz, in base64, as main.js has it, which xz-decompress, before this, decompresses, and the
+// The module's compressed with xz, in Z85, as main.js has it, which xz-decompress, before this, decompresses, and the
 // load path is each gem's, as packed.
-async function start({ wasm, loadPaths, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
   vaultName = vault;
-  const bytes = Uint8Array.from(atob(wasm), (char) => char.charCodeAt(0));
+  const bytes = fromZ85(wasm, wasmSize);
   const decompressed = new Response(new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream()));
   const module = await WebAssembly.compile(await decompressed.arrayBuffer());
   root = new PreopenDirectory('/', new Map());
@@ -84,6 +84,21 @@ async function rewrite({ type, path, markdown, bare, execute }) {
   root.dir.contents.set(REQUEST, new File(new TextEncoder().encode(JSON.stringify(request))));
   const answer = JSON.parse((await vm.evalAsync(`RaindownEngine.answer('/${REQUEST}')`)).toString());
   return { ...answer, written: writtenFiles(folderAt(['vault']), '') };
+}
+
+// Z85's bytes, cut to their size, as bin/build pads them to a multiple of 4.
+const Z85 = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.-:+=^!/*?&<>()[]{}@%$#';
+function fromZ85(text, size) {
+  const digits = new Uint8Array(128);
+  for (let digit = 0; digit < 85; digit++) digits[Z85.charCodeAt(digit)] = digit;
+  const bytes = new Uint8Array(text.length / 5 * 4);
+  const view = new DataView(bytes.buffer);
+  for (let at = 0, to = 0; at < text.length; at += 5, to += 4) {
+    let value = 0;
+    for (let place = at; place < at + 5; place++) value = value * 85 + digits[text.charCodeAt(place)];
+    view.setUint32(to, value);
+  }
+  return bytes.subarray(0, size);
 }
 
 // An endpoint's request, as JSON, which Obsidian sends, as only its main thread can, resolving with its response, as
