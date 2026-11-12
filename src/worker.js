@@ -51,7 +51,7 @@ async function answer(data) {
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
 // each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '', pauseGC = false }) {
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
@@ -74,16 +74,19 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   vm.eval([
     "require 'rbconfig'",
     "require '/engine/bytecode'",
+    ...(pauseGC ? ['GC.disable'] : []),
     `$LOAD_PATH.unshift(*${JSON.stringify(loadPaths)})`,
     "require 'engine'",
     "require 'worker'"
   ].join('\n'));
   mark('raindownLoaded');
+  const gc = JSON.parse(vm.eval("JSON.generate(count: GC.count, ms: GC.stat(:time))").toString());
+  if (pauseGC) vm.eval('GC.enable');
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   mark('watching');
-  return { ready: true, timings };
+  return { ready: true, timings: { ...timings, gcCount: gc.count, gcMs: gc.ms } };
 }
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.

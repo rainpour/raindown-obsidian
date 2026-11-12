@@ -129,6 +129,22 @@ async function smoke() {
     await engine.rewrite({ path: firstNote, markdown: fs.readFileSync(path.join(folder, firstNote), 'utf8'), bare: false }, { timeout: 60000 });
     const firstWrite = Math.round(performance.now() - first);
     console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
+    // Started again with garbage collection paused while Raindown loads, and not, in turn, giving each step's median.
+    const starts = { collecting: [], paused: [] };
+    for (let again = 0; again < 5; again++) {
+      for (const kind of Object.keys(starts)) {
+        engine.pauseGC = kind === 'paused';
+        engine.stop();
+        await engine.start();
+        starts[kind].push(engine.timings);
+      }
+    }
+    engine.pauseGC = false;
+    for (const [kind, timings] of Object.entries(starts)) {
+      const median = (step) => timings.map((it) => it[step]).sort((a, b) => a - b)[2];
+      const loading = timings.map((it) => it.raindownLoaded - it.filesCopied).sort((a, b) => a - b)[2];
+      console.log(`GC ${kind}: loading Raindown ${loading} ms, started ${median('started')} ms, ${median('gcCount')} collections, ${median('gcMs')} ms in GC`);
+    }
     failures = [
       ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
       ...await checkEndpoint(engine)
