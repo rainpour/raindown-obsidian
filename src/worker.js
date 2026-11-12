@@ -51,7 +51,7 @@ async function answer(data) {
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
 // each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '', profile = false }) {
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
@@ -64,6 +64,8 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   mark('compiled');
   root = new PreopenDirectory('/', new Map());
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
+  const wasiCalls = {};
+  if (profile) profiled(wasi, wasiCalls);
   ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));
   mark('rubyStarted');
   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
@@ -74,17 +76,100 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   vm.eval([
     "require 'rbconfig'",
     "require '/engine/bytecode'",
+    ...(profile ? [RUBY_PROFILER] : []),
     `$LOAD_PATH.unshift(*${JSON.stringify(loadPaths)})`,
     "require 'engine'",
     "require 'worker'"
   ].join('\n'));
   mark('raindownLoaded');
+  let report;
+  if (profile) {
+    const calls = Object.entries(wasiCalls).sort(([, a], [, b]) => b.ms - a.ms)
+      .map(([name, { count, ms }]) => `${name} ${count}x ${Math.round(ms)} ms`).join(', ');
+    report = `${vm.eval('RaindownProfile.report').toString()}\nWASI calls while starting: ${calls}`;
+  }
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   mark('watching');
-  return { ready: true, timings };
+  return { ready: true, timings, report };
 }
+
+// Each WASI call counted and timed, by its name.
+function profiled(wasi, calls) {
+  for (const [name, call] of Object.entries(wasi.wasiImport)) {
+    wasi.wasiImport[name] = (...args) => {
+      const before = performance.now();
+      try {
+        return call(...args);
+      } finally {
+        calls[name] ??= { count: 0, ms: 0 };
+        calls[name].count++;
+        calls[name].ms += performance.now() - before;
+      }
+    };
+  }
+}
+
+// Times each require, without those inside it, by the file it loaded, and loading bytecode, for the report.
+const RUBY_PROFILER = `
+module RaindownProfile
+  @own = Hash.new(0.0)
+  @stack = []
+  @bytecode = [0, 0.0]
+  @searches = 0
+  class << self
+    attr_reader :own, :stack, :bytecode
+    attr_accessor :searches
+
+    def now = Process.clock_gettime(Process::CLOCK_MONOTONIC)
+
+    def timed
+      before = $LOADED_FEATURES.size
+      began = now
+      stack << 0.0
+      result = yield
+      took = now - began
+      inner = stack.pop
+      stack[-1] += took unless stack.empty?
+      own[$LOADED_FEATURES[before..].last] += took - inner if $LOADED_FEATURES.size > before
+      result
+    end
+
+    def report
+      total = own.values.sum
+      groups = Hash.new(0.0)
+      own.each { |file, took| groups[file[%r{^/gems/([^/]+)}, 1] || file[%r{^/(usr|engine)}, 1] || 'other'] += took }
+      raindown = Hash.new(0.0)
+      own.each { |file, took| raindown[file[%r{^/gems/raindown/lib/raindown/([^/.]+)}, 1]] += took if file.start_with?('/gems/raindown/') }
+      [
+        format('Required %d files in %.0f ms, %.0f ms of it loading %d bytecode files', own.size, total * 1000, bytecode[1] * 1000, bytecode[0]),
+        'By gem: ' + groups.sort_by { -it[1] }.map { |name, took| format('%s %.0f', name, took * 1000) }.join(', '),
+        'Raindown by folder: ' + raindown.sort_by { -it[1] }.first(15).map { |name, took| format('%s %.1f', name, took * 1000) }.join(', '),
+        'Slowest files: ' + own.sort_by { -it[1] }.first(20).map { |file, took| format('%s %.1f', file, took * 1000) }.join(', ')
+      ].join("\\n")
+    end
+  end
+
+  module Requires
+    def require(name) = RaindownProfile.timed { super }
+    def require_relative(name) = require(File.expand_path(name, File.dirname(caller_locations(1, 1).first.path)))
+  end
+end
+Kernel.prepend(RaindownProfile::Requires)
+Object.prepend(RaindownProfile::Requires)
+class << RubyVM::InstructionSequence
+  prepend(Module.new do
+    def load_iseq(path)
+      began = RaindownProfile.now
+      result = super
+      RaindownProfile.bytecode[0] += 1 if result
+      RaindownProfile.bytecode[1] += RaindownProfile.now - began
+      result
+    end
+  end)
+end
+`;
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.
 function compiled(stream) {

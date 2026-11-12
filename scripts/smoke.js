@@ -121,6 +121,7 @@ async function smoke() {
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-smoke-'));
   fs.cpSync(path.join(ROOT, 'test', 'vault'), folder, { recursive: true });
   const engine = new RaindownEngine(vaultApp(folder), { runtime: () => load('./runtime'), Worker: InProcessWorker, requestUrl });
+  engine.profile = true;
   const started = performance.now();
   let failures;
   try {
