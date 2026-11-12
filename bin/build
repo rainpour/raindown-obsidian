@@ -68,7 +68,7 @@ def ruby_module
   return File.expand_path(ENV['RUBY_WASM']) if ENV['RUBY_WASM']
 
   inputs = %w[scripts/ruby_wasm.rb wasm/Gemfile.lock].map { File.read(File.join(ROOT, it)) }.join
-  path = File.join(BUILD, 'runtime', "ruby-#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
+  path = File.join(BUILD, 'module', "ruby-#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
   return path if File.exist?(path)
 
   FileUtils.mkdir_p(File.dirname(path))
@@ -106,6 +106,9 @@ loaded['gems'].each do |name, gem|
 end
 %w[engine.rb bytecode.rb worker.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
 
+# Files Ruby loads before src/bytecode.rb, from their source, which is kept.
+BEFORE_BYTECODE = %w[rbconfig.rb].freeze
+
 # 3. Bytecode, with build/root as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest are
 # rarely loaded, and they're compiled from source when they are.
 folders = %w[usr gems engine]
@@ -120,6 +123,7 @@ if ENV['WASMTIME']
   # Only the bytecode's packed, as each source file's left empty, which Ruby still needs to find it to require it.
   # A file that failed to compile keeps its source.
   emptied = compiled.count do |file|
+    next false if BEFORE_BYTECODE.include?(File.basename(file))
     next false unless File.exist?(File.join(STAGE, 'bytecode', "#{file}.yarb"))
 
     File.write(File.join(STAGE, file), '')
