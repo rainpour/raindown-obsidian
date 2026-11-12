@@ -71,12 +71,15 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   syncFiles({ changed: files });
   changes.clear();
   mark('filesCopied');
+  // Garbage collection's paused while Raindown loads, which collects twice otherwise, taking about 50 ms in all.
   vm.eval([
     "require 'rbconfig'",
     "require '/engine/bytecode'",
+    'GC.disable',
     `$LOAD_PATH.unshift(*${JSON.stringify(loadPaths)})`,
     "require 'engine'",
-    "require 'worker'"
+    "require 'worker'",
+    'GC.enable'
   ].join('\n'));
   mark('raindownLoaded');
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
