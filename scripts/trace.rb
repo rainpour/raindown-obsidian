@@ -17,6 +17,49 @@ VAULT = File.expand_path('../test/vault', __dir__)
 # JavaScript nodes.
 NATIVE_ONLY = %w[quickjs].freeze
 
+# The vault's JavaScript nodes, which Raindown runs in QuickJS natively, run in a process of its own here, so what QuickJS
+# loads, like OpenSSL, isn't packed, as the plugin's worker runs them itself.
+class ForkedQuickJS
+  def initialize
+    requests, @requests = IO.pipe
+    @replies, replies = IO.pipe
+    fork do
+      @requests.close
+      @replies.close
+      answer(requests, replies)
+    end
+    requests.close
+    replies.close
+  end
+
+  def request(**message)
+    @requests.puts(JSON.generate(message))
+    reply = JSON.parse(@replies.gets)
+    raise Raindown::JSNodes::Error, reply['error'] if reply['error']
+
+    reply
+  end
+
+  private
+
+  def answer(requests, replies)
+    require 'raindown/js/quickjs_host'
+    host = Raindown::JSNodes::QuickJSHost.new
+    requests.each_line do |line|
+      replies.puts(JSON.generate(answered(host, JSON.parse(line, symbolize_names: true))))
+      replies.flush
+    end
+    exit!(0)
+  end
+
+  def answered(host, message)
+    host.request(**message)
+  rescue Raindown::JSNodes::Error => e
+    { error: e.message }
+  end
+end
+Raindown::JSNodes.host = ForkedQuickJS.new
+
 # Native Raindown's answers, by each note's path, written back and rendered, which scripts/smoke.js checks the
 # plugin's match.
 answers, renders = [false, true].map do |render|
