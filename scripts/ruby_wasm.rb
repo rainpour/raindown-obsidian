@@ -2,12 +2,26 @@
 
 # Builds ruby.wasm's module for the plugin, as ruby.wasm's npm package builds its own, with rbwasm and the js gem, but
 # with only the extensions Raindown and a vault's nodes use. It leaves out OpenSSL, as Obsidian makes the plugin's HTTPS
-# requests, and WebAssembly has no sockets, and ripper, objspace, coverage and continuation, which only tools use. Then
-# it strips its debug sections, as the npm package's is. bin/build runs it, with wasm/Gemfile's gems:
+# requests, and WebAssembly has no sockets, and ripper, objspace, coverage and continuation, which only tools use. It
+# also leaves out the transcoders for Chinese, Japanese and Korean character sets, and Japanese phones' emoji, which
+# are 2.6 MB of tables, as Raindown reads UTF-8, which every language's text in Obsidian is in. Ruby's
+# enc/make_encmake.rb takes them as --no-transes in ENCS, from the environment, as it was before Bundler loaded, which
+# rbwasm builds Ruby with, so this runs itself again with it. rbwasm doesn't count it in reusing a Ruby it built
+# before, so it's built clean. Then it strips its debug sections, as the npm package's is.
+# bin/build runs it, with wasm/Gemfile's gems:
 #   BUNDLE_GEMFILE=wasm/Gemfile RUBY_WASM_ROOT=build/ruby_wasm bundle exec ruby scripts/ruby_wasm.rb OUTPUT
 require 'ruby_wasm'
 require 'ruby_wasm/cli'
 require 'tmpdir'
+
+TRANSCODERS_LEFT_OUT = %w[
+  big5 chinese gb18030 gbk korean japanese japanese_euc japanese_sjis iso2022 emoji emoji_iso2022_kddi emoji_sjis_docomo
+  emoji_sjis_kddi emoji_sjis_softbank utf8_mac
+].join(' ')
+ENCS = "--no-transes='#{TRANSCODERS_LEFT_OUT}'".freeze
+unless Bundler.original_env['ENCS'] == ENCS
+  Bundler.with_original_env { exec({ 'ENCS' => ENCS }, 'bundle', 'exec', 'ruby', __FILE__, *ARGV) }
+end
 
 EXTENSIONS = %w[
   cgi/escape date digest digest/bubblebabble digest/md5 digest/rmd160 digest/sha1 digest/sha2 etc fcntl json
@@ -67,7 +81,7 @@ Dir.mktmpdir do |dir|
   built = File.join(dir, 'ruby.wasm')
   RubyWasm::CLI.new(stdout: $stdout, stderr: $stderr).run(
     ['build', '--ruby-version', '3.4', '--target', 'wasm32-unknown-wasip1', '--build-profile', 'full', '--no-stdlib',
-     '-o', built]
+     '--clean', '-o', built]
   )
   File.binwrite(output, Stripped.module_bytes(File.binread(built)))
 end
