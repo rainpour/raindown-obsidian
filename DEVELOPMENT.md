@@ -10,7 +10,7 @@ WebAssembly has no processes or sockets, so Ruby waits on the worker, through ru
 
 ## Building
 
-Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`, which git ignores, as CI builds it for a release. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `wasm/Gemfile`'s gems, `rbwasm` and the `js` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. It downloads ruby.wasm into `build/` the first time.
+Obsidian loads one file, `main.js`, which `bin/build` builds from `src/`, with Raindown packed into ruby.wasm's module, gzipped in base64. Edit `src/`, not `main.js`, which git ignores, as CI builds it for a release. It needs a checkout of Raindown, at `../raindown` or `RAINDOWN_DIR`, with its gems installed, and `wasm/Gemfile`'s gems, `rbwasm` and the `js` gem, in the same Ruby. With [wasmtime](https://wasmtime.dev), as `WASMTIME`, it also compiles Raindown to bytecode, which halves how long it takes to load. Then only the bytecode's packed, with each source file left empty, as Ruby needs to find a file to require it, which makes `main.js` smaller. It downloads ruby.wasm into `build/` the first time.
 
 ```sh
 BUNDLE_GEMFILE=wasm/Gemfile bundle install
