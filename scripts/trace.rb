@@ -10,6 +10,21 @@
 # WebAssembly. Gems with native code, like json, or prism, even precompiled, are left to the standard library, which has
 # them built in, as their Ruby must match the code built into WebAssembly's Ruby.
 require 'tmpdir'
+
+# The Ruby files read as text, rather than only loaded, like those Lowkey parses for a class that includes LowType,
+# whose source bin/build packs as well as their bytecode.
+module ReadSources
+  def self.files
+    @files ||= Set.new
+  end
+
+  def read(path, ...)
+    ReadSources.files << File.expand_path(path.to_s) if path.to_s.end_with?('.rb')
+    super
+  end
+end
+File.singleton_class.prepend(ReadSources)
+
 require 'engine'
 
 VAULT = File.expand_path('../test/vault', __dir__)
@@ -96,12 +111,21 @@ if defined?(Bundler)
 end
 
 lib = RbConfig::CONFIG['rubylibdir']
+
+# A file's path in WebAssembly's Ruby, as bin/build packs it, when it's packed.
+def packed_path(file, lib, gems)
+  return "/usr/local/lib/ruby/3.4.0/#{file.delete_prefix("#{lib}/")}" if file.start_with?("#{lib}/")
+
+  name, gem = gems.find { |_, gem| file.start_with?("#{gem['root']}/") }
+  "/gems/#{name}/#{file.delete_prefix("#{gem['root']}/")}" if gem
+end
 stdlib = loaded.select { it.start_with?("#{lib}/") }
 gems = JSON.parse(ENV.fetch('RAINDOWN_TRACE_GEMS')).to_h do |name, gem|
   [name, gem.merge('files' => loaded.filter_map { it.delete_prefix("#{gem['root']}/") if it.start_with?("#{gem['root']}/") }.sort)]
 end
 File.write(ARGV.fetch(0), JSON.pretty_generate(
   stdlib: stdlib.map { it.delete_prefix("#{lib}/").sub("#{RbConfig::CONFIG['arch']}/", 'wasm32-wasi/') }.sort, gems:,
-  answers:, renders:
+  answers:, renders:,
+  read: ReadSources.files.filter_map { |file| packed_path(file, lib, gems) }.sort
 ))
 puts "#{stdlib.size} standard library files and #{gems.size} gems loaded"

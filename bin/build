@@ -106,7 +106,8 @@ loaded['gems'].each do |name, gem|
 end
 %w[engine.rb bytecode.rb worker.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
 
-# Files Ruby loads before src/bytecode.rb, from their source, which is kept.
+# Files Ruby loads before src/bytecode.rb, from their source, which is kept, as are those Raindown reads as text, like
+# Lowkey's for a class that includes LowType, which scripts/trace.rb lists.
 BEFORE_BYTECODE = %w[rbconfig.rb].freeze
 
 # 3. Bytecode, with build/root as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest are
@@ -123,7 +124,7 @@ if ENV['WASMTIME']
   # Only the bytecode's packed, as each source file's left empty, which Ruby still needs to find it to require it.
   # A file that failed to compile keeps its source.
   emptied = compiled.count do |file|
-    next false if BEFORE_BYTECODE.include?(File.basename(file))
+    next false if BEFORE_BYTECODE.include?(File.basename(file)) || loaded['read'].include?(file)
     next false unless File.exist?(File.join(STAGE, 'bytecode', "#{file}.yarb"))
 
     File.write(File.join(STAGE, file), '')
