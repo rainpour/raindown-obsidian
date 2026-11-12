@@ -51,14 +51,14 @@ async function answer(data) {
 
 // The module's compressed with xz, in Z85, as main.js has it, which xz-decompress, before this, decompresses, and the
 // load path is each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, compression = 'xz', loadPaths, files, frontMatters = {}, vault = '' }) {
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
   vaultName = vault;
   const bytes = fromZ85(wasm, wasmSize);
   mark('decoded');
-  const decompressing = new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream())
+  const decompressing = decompressed(new Blob([bytes]).stream(), compression)
     .pipeThrough(new TransformStream({ flush: () => mark('decompressed') }));
   const module = await compiled(decompressing);
   mark('compiled');
@@ -84,6 +84,12 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   mark('watching');
   return { ready: true, timings };
+}
+
+function decompressed(stream, compression) {
+  if (compression === 'gzip') return stream.pipeThrough(new DecompressionStream('gzip'));
+
+  return new self['xz-decompress'].XzReadableStream(stream);
 }
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.

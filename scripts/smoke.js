@@ -130,7 +130,10 @@ async function smoke() {
   const { answers, renders } = JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'loaded.json'), 'utf8'));
   const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'raindown-smoke-'));
   fs.cpSync(path.join(ROOT, 'test', 'vault'), folder, { recursive: true });
-  const engine = new RaindownEngine(vaultApp(folder), { runtime: () => load('./runtime'), Worker: InProcessWorker, requestUrl });
+  const runtimes = { xz: load('./runtime') };
+  runtimes.gzip = { ...runtimes.xz, ...JSON.parse(fs.readFileSync(path.join(ROOT, 'build', 'gzip.json'), 'utf8')) };
+  let runtime = runtimes.xz;
+  const engine = new RaindownEngine(vaultApp(folder), { runtime: () => runtime, Worker: InProcessWorker, requestUrl });
   const started = performance.now();
   let failures;
   try {
@@ -139,14 +142,20 @@ async function smoke() {
     await engine.rewrite({ path: firstNote, markdown: fs.readFileSync(path.join(folder, firstNote), 'utf8'), bare: false }, { timeout: 60000 });
     const firstWrite = Math.round(performance.now() - first);
     console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
-    // Started again, as one start's times vary, giving each step's median.
-    const starts = [engine.timings];
-    for (let again = 1; again < STARTS; again++) {
-      engine.stop();
-      await engine.start();
-      starts.push(engine.timings);
+    // Started again with each compression in turn, as one start's times vary, giving each step's median.
+    const starts = { xz: [], gzip: [] };
+    for (let again = 0; again < STARTS; again++) {
+      for (const compression of Object.keys(starts)) {
+        runtime = runtimes[compression];
+        engine.stop();
+        await engine.start();
+        starts[compression].push(engine.timings);
+      }
     }
-    console.log(`Median of ${STARTS} starts: ${steps(medians(starts))}`);
+    for (const [compression, timings] of Object.entries(starts)) {
+      console.log(`Median of ${STARTS} starts with ${compression}: ${steps(medians(timings))}`);
+    }
+    runtime = runtimes.xz;
     failures = [
       ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
       ...await checkEndpoint(engine)

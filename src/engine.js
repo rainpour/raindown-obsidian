@@ -51,7 +51,7 @@ class RaindownEngine {
   start() {
     this.starting ??= (async () => {
       const began = performance.now();
-      const { wasm, wasmSize, worker, loadPaths } = this.runtime();
+      const { wasm, wasmSize, compression, worker, loadPaths } = this.runtime();
       const [files, nodes] = [[], new Map()];
       await this.readFolder('', files, nodes);
       this.nodes = nodes;
@@ -61,7 +61,7 @@ class RaindownEngine {
       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vault = this.app.vault.getName?.() ?? '';
       const vaultRead = Math.round(performance.now() - began);
-      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, compression, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
       // How long starting took, in milliseconds: reading the vault, each of the worker's steps, from when it began, and
       // in all.
       this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };

@@ -22,6 +22,7 @@
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
 require 'digest'
 require 'fileutils'
+require 'zlib'
 require 'json'
 
 RUBY_WASM_VERSION = '2.10.1'
@@ -165,6 +166,9 @@ run('xz', '--format=xz', '--check=crc32', '-9e', '--keep', '--force', wasm)
 worker = [browser, File.read(xz_decompress), File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
 compressed = File.binread("#{wasm}.xz")
 runtime = { wasm: z85(compressed), wasmSize: compressed.bytesize, worker:, loadPaths: load_paths }
+# The module compressed with gzip too, for scripts/smoke.js to time starting with it against xz.
+gzipped = Zlib.gzip(File.binread(wasm), level: 9)
+File.write(File.join(BUILD, 'gzip.json'), JSON.generate(wasm: z85(gzipped), wasmSize: gzipped.bytesize, compression: 'gzip'))
 sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
             './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
             './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js')) }
