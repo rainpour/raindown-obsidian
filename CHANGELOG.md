@@ -18,12 +18,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `|+` rows show in the accent colour
 - Tables don't wrap, so wide ones scroll sideways
 - Phones and tablets, as Raindown runs inside the plugin
+- Raindown's services for the vault's Ruby and JavaScript nodes: the vault's files, fetch through Obsidian and a cache
 
 ### Changed
 
 - Raindown runs inside the plugin, so there's nothing else to install
 - Endpoints are sent by Obsidian, rather than curl
 - JavaScript components run inside the plugin, rather than Node.js
+- The plugin is less than half the size, about 4 MB, and Raindown starts in about half the time
 - `<{ }>` in reading view is rendered by Obsidian, from Raindown's Markdown
 - Typing in a `table:` table's fixed column saves on Enter, Tab or Cmd+S, not as you type
 
