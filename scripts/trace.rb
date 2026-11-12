@@ -13,6 +13,9 @@ require 'tmpdir'
 require 'engine'
 
 VAULT = File.expand_path('../test/vault', __dir__)
+# Gems with native code that Raindown loads natively, which the plugin does without, like quickjs, as its worker runs
+# JavaScript nodes.
+NATIVE_ONLY = %w[quickjs].freeze
 
 # Native Raindown's answers, by each note's path, written back and rendered, which scripts/smoke.js checks the
 # plugin's match.
@@ -38,7 +41,11 @@ if defined?(Bundler)
     spec.name != 'bundler' && spec.extensions.empty? && native.none?(&inside) && loaded.any?(&inside)
   end
   gems = gems.sort_by(&:name).to_h { [it.name, { root: it.full_gem_path, require_paths: it.require_paths }] }
-  paths = [File.expand_path(__dir__ + '/../src'), *gems.values.flat_map { |gem| gem[:require_paths].map { File.join(gem[:root], it) } }]
+  # Native gems Raindown only uses natively, like quickjs for JavaScript nodes, which the plugin's worker runs itself,
+  # are on the load path, so the trace runs them, but aren't packed.
+  native_only = NATIVE_ONLY.filter_map { Gem.loaded_specs[it] }.flat_map(&:full_require_paths)
+  paths = [File.expand_path(__dir__ + '/../src'), *gems.values.flat_map { |gem| gem[:require_paths].map { File.join(gem[:root], it) } },
+           *native_only]
   Bundler.with_unbundled_env do
     ENV['RAINDOWN_TRACE_GEMS'] = JSON.generate(gems)
     exec(RbConfig.ruby, '--disable-gems', '-rrbconfig', *paths.map { "-I#{it}" }, __FILE__, *ARGV)
