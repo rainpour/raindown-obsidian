@@ -21,6 +21,8 @@ Raindown's packed into a ruby.wasm module of the plugin's own, which `scripts/ru
 
 `scripts/trace.rb` writes back `test/vault`, with a note for each of Raindown's directives, and lists the Ruby files that loaded, so only those are packed. A directive that loads a file the vault doesn't would fail in the plugin, so give the vault a note using it.
 
+Starting Raindown is timed step by step: reading the vault, decoding and decompressing the module, compiling it, starting Ruby, copying the vault in and loading Raindown. Obsidian's console shows it as `Raindown started`, in milliseconds from when the worker began each step, and the smoke test prints how long each took, with the first write-back's.
+
 Once `main.js` is built, `scripts/smoke.js` runs its worker, with Raindown in WebAssembly, in Node, on a copy of `test/vault`, and fails the build unless each note's written back as native Raindown wrote it in `scripts/trace.rb`. So a file missing from the module, or a ruby.wasm update that breaks the worker, is caught before a release. Without Node, `bin/build` skips it, except in CI, which always runs it. Run it again on its own with `node scripts/smoke.js`.
 
 ## Testing

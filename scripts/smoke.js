@@ -103,6 +103,17 @@ async function checkEndpoint(engine) {
   }
 }
 
+// The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives.
+function steps({ vaultRead, started, ...timings }) {
+  let before = 0;
+  const each = Object.entries(timings).map(([step, at]) => {
+    const took = at - before;
+    before = at;
+    return `${step} ${took}`;
+  });
+  return [`vaultRead ${vaultRead}`, ...each, `worker script and messages ${started - vaultRead - before}`].join(', ');
+}
+
 async function smoke() {
   const load = mainModules();
   const { RaindownEngine } = load('./engine');
@@ -113,6 +124,11 @@ async function smoke() {
   const started = performance.now();
   let failures;
   try {
+    const firstNote = Object.keys(answers)[0];
+    const first = performance.now();
+    await engine.rewrite({ path: firstNote, markdown: fs.readFileSync(path.join(folder, firstNote), 'utf8'), bare: false }, { timeout: 60000 });
+    const firstWrite = Math.round(performance.now() - first);
+    console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
     failures = [
       ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
       ...await checkEndpoint(engine)

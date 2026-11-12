@@ -50,18 +50,27 @@ async function answer(data) {
 }
 
 // The module's compressed with xz, in Z85, as main.js has it, which xz-decompress, before this, decompresses, and the
-// load path is each gem's, as packed.
+// load path is each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
 async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
+  const began = performance.now();
+  const timings = {};
+  const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
   vaultName = vault;
   const bytes = fromZ85(wasm, wasmSize);
-  const module = await compiled(new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream()));
+  mark('decoded');
+  const decompressing = new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream())
+    .pipeThrough(new TransformStream({ flush: () => mark('decompressed') }));
+  const module = await compiled(decompressing);
+  mark('compiled');
   root = new PreopenDirectory('/', new Map());
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
   ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));
+  mark('rubyStarted');
   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
   folderAt(['vault', '.obsidian']);
   syncFiles({ changed: files });
   changes.clear();
+  mark('filesCopied');
   vm.eval([
     "require 'rbconfig'",
     "require '/engine/bytecode'",
@@ -69,10 +78,12 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
     "require 'engine'",
     "require 'worker'"
   ].join('\n'));
+  mark('raindownLoaded');
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
-  return { ready: true };
+  mark('watching');
+  return { ready: true, timings };
 }
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.

@@ -50,6 +50,7 @@ class RaindownEngine {
   // Started once, and again after it's stopped, like when a .raindown folder changed, so its nodes load again.
   start() {
     this.starting ??= (async () => {
+      const began = performance.now();
       const { wasm, wasmSize, worker, loadPaths } = this.runtime();
       const [files, nodes] = [[], new Map()];
       await this.readFolder('', files, nodes);
@@ -59,7 +60,12 @@ class RaindownEngine {
       this.worker.onerror = (event) => this.fail(new Error(`Raindown stopped: ${event.message}`));
       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vault = this.app.vault.getName?.() ?? '';
-      await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      const vaultRead = Math.round(performance.now() - began);
+      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      // How long starting took, in milliseconds: reading the vault, each of the worker's steps, from when it began, and
+      // in all.
+      this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };
+      console.debug('Raindown started', this.timings);
     })();
     this.starting.catch(() => this.stop());
 
