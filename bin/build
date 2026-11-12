@@ -11,7 +11,8 @@
 #   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
 #   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm.
-#   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did.
+#   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did. It's
+#      skipped without Node, except in CI.
 # Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
 # ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM.
 #   gem install ruby_wasm
@@ -135,4 +136,9 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   module.exports = load('./plugin');
 JS
 puts format('Built main.js: %.1f MB, with Raindown packed into %.1f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
-run('node', File.join(ROOT, 'scripts', 'smoke.js'))
+# Node runs the smoke test, which CI has, so a release is always checked, but working on the plugin doesn't need it.
+if ENV['CI'] || system('node', '--version', out: File::NULL, err: File::NULL)
+  run('node', File.join(ROOT, 'scripts', 'smoke.js'))
+else
+  puts 'Smoke test skipped: no Node, which CI runs it with'
+end
