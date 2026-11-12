@@ -49,12 +49,13 @@ async function answer(data) {
   }
 }
 
-// The module's gzipped, in base64, as main.js has it, and the load path is each gem's, as packed.
+// The module's compressed with xz, in base64, as main.js has it, which xz-decompress, before this, decompresses, and the
+// load path is each gem's, as packed.
 async function start({ wasm, loadPaths, files, frontMatters = {}, vault = '' }) {
   vaultName = vault;
   const bytes = Uint8Array.from(atob(wasm), (char) => char.charCodeAt(0));
-  const unzipped = new Response(new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip')));
-  const module = await WebAssembly.compile(await unzipped.arrayBuffer());
+  const decompressed = new Response(new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream()));
+  const module = await WebAssembly.compile(await decompressed.arrayBuffer());
   root = new PreopenDirectory('/', new Map());
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
   ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));

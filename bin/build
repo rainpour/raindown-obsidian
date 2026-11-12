@@ -2,7 +2,7 @@
 # frozen_string_literal: true
 
 # Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with only the Ruby files it loads into
-# ruby.wasm's module, Ruby compiled to WebAssembly, gzipped, in base64, with ruby.wasm's browser bundle and the worker
+# ruby.wasm's module, Ruby compiled to WebAssembly, compressed with xz, in base64, with ruby.wasm's browser bundle and the worker
 # that runs it.
 #   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
 #      lists what it wrote and the standard library files and gems that loaded, in build/loaded.json.
@@ -23,9 +23,10 @@
 require 'digest'
 require 'fileutils'
 require 'json'
-require 'zlib'
 
 RUBY_WASM_VERSION = '2.10.1'
+# xz-decompress, which decompresses the module in the worker, as xz makes it a third smaller than gzip.
+XZ_DECOMPRESS_VERSION = '0.2.3'
 ROOT = File.expand_path('..', __dir__)
 BUILD = File.join(ROOT, 'build')
 STAGE = File.join(BUILD, 'root')
@@ -74,6 +75,12 @@ def ruby_module
   FileUtils.mkdir_p(File.dirname(path))
   run(WASM_GEMS.merge('RUBY_WASM_ROOT' => File.join(BUILD, 'ruby_wasm')), *BUNDLED, 'ruby', File.join(ROOT, 'scripts', 'ruby_wasm.rb'), path)
   path
+end
+
+# xz-decompress's script, which defines XzReadableStream: xz-embedded, compiled to WebAssembly, inside it.
+def xz_decompress
+  File.join(runtime('xz', "https://registry.npmjs.org/xz-decompress/-/xz-decompress-#{XZ_DECOMPRESS_VERSION}.tgz"),
+            'package', 'dist', 'package', 'xz-decompress.min.js')
 end
 
 def ruby_npm
@@ -144,8 +151,10 @@ browser = browser.sub('exports.DefaultRubyVM = DefaultRubyVM;') do
   'exports.DefaultRubyVM = DefaultRubyVM; Object.assign(exports, { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory });'
 end
 abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" unless browser.include?('Object.assign(exports, { RubyVM')
-runtime = { wasm: [Zlib.gzip(File.binread(wasm), level: 9)].pack('m0'),
-            worker: [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n"), loadPaths: load_paths }
+# Compressed with xz, which xz-embedded decompresses, with a CRC-32 check, as it can't check SHA-256.
+run('xz', '--format=xz', '--check=crc32', '-9e', '--keep', '--force', wasm)
+worker = [browser, File.read(xz_decompress), File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
+runtime = { wasm: [File.binread("#{wasm}.xz")].pack('m0'), worker:, loadPaths: load_paths }
 sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
             './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
             './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js')) }
