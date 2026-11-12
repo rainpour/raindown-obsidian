@@ -103,6 +103,16 @@ async function checkEndpoint(engine) {
   }
 }
 
+const STARTS = 5;
+
+// Each step's median time, from when the worker began, over several starts.
+function medians(starts) {
+  return Object.fromEntries(Object.keys(starts[0]).map((step) => {
+    const times = starts.map((timings) => timings[step]).sort((a, b) => a - b);
+    return [step, times[Math.floor(times.length / 2)]];
+  }));
+}
+
 // The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives.
 function steps({ vaultRead, started, ...timings }) {
   let before = 0;
@@ -129,6 +139,14 @@ async function smoke() {
     await engine.rewrite({ path: firstNote, markdown: fs.readFileSync(path.join(folder, firstNote), 'utf8'), bare: false }, { timeout: 60000 });
     const firstWrite = Math.round(performance.now() - first);
     console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
+    // Started again, as one start's times vary, giving each step's median.
+    const starts = [engine.timings];
+    for (let again = 1; again < STARTS; again++) {
+      engine.stop();
+      await engine.start();
+      starts.push(engine.timings);
+    }
+    console.log(`Median of ${STARTS} starts: ${steps(medians(starts))}`);
     failures = [
       ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
       ...await checkEndpoint(engine)
