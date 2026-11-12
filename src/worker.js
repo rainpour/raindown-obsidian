@@ -54,8 +54,7 @@ async function answer(data) {
 async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
   vaultName = vault;
   const bytes = fromZ85(wasm, wasmSize);
-  const decompressed = new Response(new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream()));
-  const module = await WebAssembly.compile(await decompressed.arrayBuffer());
+  const module = await compiled(new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream()));
   root = new PreopenDirectory('/', new Map());
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
   ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));
@@ -74,6 +73,14 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   return { ready: true };
+}
+
+// The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.
+function compiled(stream) {
+  const response = new Response(stream, { headers: { 'Content-Type': 'application/wasm' } });
+  if (WebAssembly.compileStreaming) return WebAssembly.compileStreaming(response);
+
+  return response.arrayBuffer().then((buffer) => WebAssembly.compile(buffer));
 }
 
 // The note as Raindown writes it back, with its warnings, running its endpoints with execute, or rendered as Markdown,
