@@ -22,6 +22,7 @@
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
 require 'digest'
 require 'fileutils'
+require 'zlib'
 require 'json'
 
 RUBY_WASM_VERSION = '2.10.1'
@@ -163,7 +164,7 @@ abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" 
 # Compressed with xz, which xz-embedded decompresses, with a CRC-32 check, as it can't check SHA-256.
 run('xz', '--format=xz', '--check=crc32', '-9e', '--keep', '--force', wasm)
 worker = [browser, File.read(xz_decompress), File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
-compressed = File.binread("#{wasm}.xz")
+compressed = Zlib.gzip(File.binread(wasm), level: 9)
 runtime = { wasm: z85(compressed), wasmSize: compressed.bytesize, worker:, loadPaths: load_paths }
 sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
             './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
