@@ -192,6 +192,7 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   module.exports = load('./plugin');
 JS
 puts format('Built main.js: %.2f MB, with Raindown packed into %.2f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
+puts format('main.js with gzip would be %.2f MB', (File.size(File.join(ROOT, 'main.js')) - runtime[:wasm].bytesize + z85(gzipped).bytesize) / 1e6)
 # Node runs the smoke test, which CI has, so a release is always checked, but working on the plugin doesn't need it.
 if ENV['CI'] || system('node', '--version', out: File::NULL, err: File::NULL)
   run('node', File.join(ROOT, 'scripts', 'smoke.js'))
