@@ -49,8 +49,8 @@ async function answer(data) {
   }
 }
 
-// The module's compressed with xz, in Z85, as main.js has it, which xz-decompress, before this, decompresses, and the
-// load path is each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
+// The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
+// each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
 async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
   const began = performance.now();
   const timings = {};
@@ -58,7 +58,7 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   vaultName = vault;
   const bytes = fromZ85(wasm, wasmSize);
   mark('decoded');
-  const decompressing = new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream())
+  const decompressing = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
     .pipeThrough(new TransformStream({ flush: () => mark('decompressed') }));
   const module = await compiled(decompressing);
   mark('compiled');
