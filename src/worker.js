@@ -58,7 +58,7 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   vaultName = vault;
   const bytes = fromZ85(wasm, wasmSize);
   mark('decoded');
-  const decompressing = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
+  const decompressing = new self['xz-decompress'].XzReadableStream(new Blob([bytes]).stream())
     .pipeThrough(new TransformStream({ flush: () => mark('decompressed') }));
   const module = await compiled(decompressing);
   mark('compiled');
