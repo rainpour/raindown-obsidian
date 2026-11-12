@@ -58,7 +58,8 @@ class RaindownEngine {
       this.worker.onmessage = ({ data }) => this.receive(data);
       this.worker.onerror = (event) => this.fail(new Error(`Raindown stopped: ${event.message}`));
       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
-      await this.ask({ type: 'start', wasm, loadPaths, files, frontMatters }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      const vault = this.app.vault.getName?.() ?? '';
+      await this.ask({ type: 'start', wasm, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
     })();
     this.starting.catch(() => this.stop());
 
@@ -117,19 +118,22 @@ class RaindownEngine {
     else request.resolve(answer);
   }
 
-  // An endpoint's request, which Raindown in the worker waits for, sent with Obsidian's requestUrl, which only the main
-  // thread has. Like curl in Raindown, it refuses link-local hosts, but it can't pin a name's address, or stop
+  // An endpoint's request, or a node's, through Raindown's fetch service, which Raindown in the worker waits for, sent
+  // with Obsidian's requestUrl, which only the main thread has. Like curl in Raindown, it refuses link-local hosts, but it can't pin a name's address, or stop
   // redirects, as curl does.
   async fetch(id, { method, url, headers, body }) {
     let response;
     try {
       const { hostname } = new URL(url);
-      if (LINK_LOCAL.test(hostname)) throw new Error(`Endpoint snippets can't request link-local addresses, like cloud metadata at ${hostname}`);
+      if (LINK_LOCAL.test(hostname)) throw new Error(`Raindown can't request link-local addresses, like cloud metadata at ${hostname}`);
 
       const started = performance.now();
       const received = await this.requestUrl({ url, method, headers, body: body ?? undefined, throw: false });
       const contentType = Object.entries(received.headers ?? {}).find(([name]) => name.toLowerCase() === 'content-type')?.[1];
-      response = { body: received.text, status: received.status, content_type: contentType ?? '', milliseconds: Math.round(performance.now() - started) };
+      response = {
+        body: received.text, status: received.status, headers: received.headers ?? {}, content_type: contentType ?? '',
+        milliseconds: Math.round(performance.now() - started)
+      };
     } catch (error) {
       response = { error: error.message };
     }

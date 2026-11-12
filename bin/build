@@ -25,6 +25,8 @@ ROOT = File.expand_path('..', __dir__)
 BUILD = File.join(ROOT, 'build')
 STAGE = File.join(BUILD, 'root')
 RAINDOWN = File.expand_path(ENV.fetch('RAINDOWN_DIR', '../raindown'), ROOT)
+# Raindown's services for JavaScript nodes, which the worker answers, before its own code.
+SERVICES = File.join(RAINDOWN, 'lib', 'raindown', 'js', 'services.js')
 # The gems' Ruby is Raindown's own, which mise gives it, unless there's no mise, like in CI, with rbwasm installed into it.
 def mise_exec
   return [] unless system('mise', '--version', out: File::NULL, err: File::NULL)
@@ -101,7 +103,7 @@ wasm = File.join(BUILD, 'raindown.wasm')
 run(*MISE, 'rbwasm', 'pack', File.join(ruby_npm, 'ruby.wasm'), '-o', wasm,
     *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] }, chdir: RAINDOWN)
 
-# main.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
+# main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
 # WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
 browser = File.read(File.join(ruby_npm, 'browser.umd.js'))
 browser = browser.sub('exports.DefaultRubyVM = DefaultRubyVM;') do
@@ -109,7 +111,7 @@ browser = browser.sub('exports.DefaultRubyVM = DefaultRubyVM;') do
 end
 abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" unless browser.include?('Object.assign(exports, { RubyVM')
 runtime = { wasm: [Zlib.gzip(File.binread(wasm), level: 9)].pack('m0'),
-            worker: "#{browser}\n#{File.read(File.join(ROOT, 'src', 'worker.js'))}", loadPaths: load_paths }
+            worker: [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n"), loadPaths: load_paths }
 sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
             './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
             './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js')) }

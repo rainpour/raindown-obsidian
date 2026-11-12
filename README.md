@@ -95,12 +95,14 @@ Adding, renaming or removing a note writes back the notes with lists, like `list
 Reading view shows `<{ }>`, like `<{ :toc }>`, as Raindown renders it, through Obsidian's own Markdown.
 
 > [!NOTE]
-> JavaScript components run inside the plugin, not Node.js, so they can't import other files or use Node's APIs, like `fs`.
+> JavaScript components run inside the plugin, so they can't import other files, and have no Node APIs, like `fs`.
+
+Ruby and JavaScript components get Raindown's [services](https://raindown.dev/docs/components#services), as `raindown`, like anywhere else: they read, list and write your vault's files, fetch through Obsidian, and keep values in a cache that lasts between sessions. A file a component writes is written to the vault with the note. Only the files the plugin copies can be read, like notes, data files and `.raindown` folders, and `git` isn't available, so it raises an error, which a component can catch.
 
 ## Files and network
 
 - **Running Raindown** - Raindown is written in Ruby, but runs inside the plugin compiled to WebAssembly in a background worker. Components can still be written in Ruby, JavaScript or Markdown
 - **Files** - It reads a copy of your vault's notes, data files and `.raindown` folders, and writes only the files a note asks it to
-- **Network** - The plugin doesn't use the network unless you ask it to via endpoints or run requests via your vault's own Ruby/JavaScript nodes in `.raindown`
+- **Network** - The plugin doesn't use the network unless you ask it to via endpoints, or your vault's own Ruby or JavaScript nodes in `.raindown` fetch through Raindown's services, which Obsidian sends, refusing link-local addresses as it does for endpoints
 - **Endpoints** - Run only from **Run the endpoints in this note**, and sent by Obsidian, which refuses link-local addresses, like cloud metadata at `169.254.169.254`. Unlike the CLI's curl, it follows redirects, and can't pin a name to the address it was checked at
 - **Size** - `main.js` is about 8.5 MB, as Ruby, compiled to WebAssembly, and Raindown are packed inside it, compressed, so there's nothing else to install, on desktop or mobile. It's started once a session, in the background, in about a second

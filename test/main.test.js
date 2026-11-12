@@ -810,7 +810,7 @@ test('moves down from the delimiter row on Enter and Tab, like from any row, rat
   assert.equal(RaindownPlugin.inFixedCell(`table: 'tasks.csv'\n${note}`, { line: 2, ch: 10 }, { bare: true }), false);
 });
 
-test("sends an endpoint's request from Raindown with Obsidian's requestUrl, and refuses link-local hosts", async () => {
+test("sends an endpoint's or a node's request from Raindown with Obsidian's requestUrl, and refuses link-local hosts", async () => {
   const { vault } = fakeVault({ 'note.md': '# A' });
   const Worker = fakeWorker(() => ({ ready: true }));
   const sent = [];
@@ -826,7 +826,7 @@ test("sends an endpoint's request from Raindown with Obsidian's requestUrl, and 
   assert.deepEqual(sent, [{ url: 'https://a.io/x', method: 'POST', headers: { A: 'b' }, body: 'c', throw: false }]);
   const [first, second] = Worker.made[0].sent.slice(1);
   assert.deepEqual([first.type, first.id, { ...first.response, milliseconds: 0 }], [
-    'fetched', 1, { body: '{"id":1}', status: 201, content_type: 'application/json', milliseconds: 0 }
+    'fetched', 1, { body: '{"id":1}', status: 201, headers: { 'Content-Type': 'application/json' }, content_type: 'application/json', milliseconds: 0 }
   ]);
   assert.match(second.response.error, /link-local addresses, like cloud metadata at 169\.254\.169\.254$/);
 });
