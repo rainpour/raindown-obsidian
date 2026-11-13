@@ -82,11 +82,26 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
     'GC.enable'
   ].join('\n'));
   mark('raindownLoaded');
+  const memory = await memorySize(vm.instance.exports.memory.buffer);
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   mark('watching');
-  return { ready: true, timings };
+  return { ready: true, timings, memory };
+}
+
+// How big Ruby's memory is once Raindown's loaded, as a snapshot would keep it: in all, in non-zero 64 KB pages, and
+// those pages gzipped.
+async function memorySize(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const pages = [];
+  for (let at = 0; at < bytes.length; at += 65536) {
+    const page = bytes.subarray(at, at + 65536);
+    if (page.some((byte) => byte !== 0)) pages.push(page);
+  }
+  const used = new Blob(pages);
+  const gzipped = await new Response(used.stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+  return { total: bytes.length, used: used.size, gzipped: gzipped.byteLength };
 }
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.

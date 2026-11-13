@@ -61,11 +61,12 @@ class RaindownEngine {
       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vault = this.app.vault.getName?.() ?? '';
       const vaultRead = Math.round(performance.now() - began);
-      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+      const { timings, memory } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
       // How long starting took, in milliseconds: reading the vault, each of the worker's steps, from when it began, and
       // in all.
       this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };
       console.debug('Raindown started', this.timings);
+      if (memory) console.log(`Ruby's memory once Raindown's loaded: ${(memory.total / 1e6).toFixed(2)} MB, ${(memory.used / 1e6).toFixed(2)} MB of it in non-zero pages, ${(memory.gzipped / 1e6).toFixed(2)} MB gzipped`);
     })();
     this.starting.catch(() => this.stop());
 
