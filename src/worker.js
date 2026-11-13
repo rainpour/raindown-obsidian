@@ -83,7 +83,7 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   ].join('\n'));
   mark('raindownLoaded');
   const memory = await memorySize(vm.instance.exports.memory.buffer);
-  vm.eval('GC.start; GC.compact');
+  vm.eval('GC.start');
   memory.collected = await memorySize(vm.instance.exports.memory.buffer);
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
