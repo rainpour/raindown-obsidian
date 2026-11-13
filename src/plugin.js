@@ -19,9 +19,10 @@ const DELAY = 1000;
 const BLOCK_COMMENT = /^\s*<!--(?!\s*(?::[A-Za-z]|[A-Za-z][\w-]*(?:::[A-Z]\w*)*:)).*-->\s*$/;
 const TIMEOUT = 10000;
 const ENDPOINT_TIMEOUT = 60000;
-// Each section of reading view with <{ }> in it is rendered with the whole note, between these, then picked out.
-const SECTION_START = '<!-- raindown:section -->';
-const SECTION_END = '<!-- raindown:end-section -->';
+// Reading view's sections with <{ }> in them are rendered all at once, with the whole note, each between these, with its
+// number, then picked out.
+const sectionStart = (index) => `<!-- raindown:section ${index} -->`;
+const sectionEnd = (index) => `<!-- raindown:end-section ${index} -->`;
 // How many sections' Markdown reading view keeps.
 const SECTIONS_KEPT = 50;
 // Shown below the Bare syntax setting, as a bare directive writes over the lines below it, up to the next blank line.
@@ -47,21 +48,24 @@ function vaultPath(...parts) {
   }, []).join('/');
 }
 
-// The Markdown Raindown rendered between a section's markers, from the whole note's.
-function sectionMarkdown(markdown) {
-  const start = markdown.indexOf(SECTION_START);
-  const end = markdown.indexOf(SECTION_END);
+// The Markdown Raindown rendered between a section's markers, from the whole note's, or null without them.
+function sectionMarkdown(markdown, index) {
+  const start = markdown.indexOf(sectionStart(index));
+  const end = markdown.indexOf(sectionEnd(index));
   if (start === -1 || end === -1) return null;
 
-  return markdown.slice(start + SECTION_START.length, end);
+  return markdown.slice(start + sectionStart(index).length, end);
 }
 
-// The note with a section's lines between markers, each a block of its own, so Raindown keeps them where they are.
-function markSection(text, lineStart, lineEnd) {
+// The note with each section's lines, as { start, end }, between its markers, each a block of its own, so Raindown keeps
+// them where they are. Marked from the last, so the lines before each are where they were.
+function markSections(text, sections) {
   const lines = text.split('\n');
-  lines.splice(lineEnd + 1, 0, '', SECTION_END, '');
-  lines.splice(lineStart, 0, '', SECTION_START, '');
-
+  for (let index = sections.length - 1; index >= 0; index--) {
+    const { start, end } = sections[index];
+    lines.splice(end + 1, 0, '', sectionEnd(index), '');
+    lines.splice(start, 0, '', sectionStart(index), '');
+  }
   return lines.join('\n');
 }
 
@@ -1047,7 +1051,8 @@ class RaindownPlugin extends Plugin {
   }
 
   // Reading view shows a section with <{ }> in it, like <{ :toc }>, as Raindown renders it, in Markdown, which Obsidian
-  // renders, as Commonmarker can't run in the plugin.
+  // renders, as Commonmarker can't run in the plugin. The note's sections with <{ }> in them are rendered at once, so
+  // a note with several is rendered once, not once for each.
   async renderSection(el, context) {
     const section = context.getSectionInfo(el);
     const file = this.app.vault.getAbstractFileByPath(context.sourcePath);
@@ -1055,7 +1060,10 @@ class RaindownPlugin extends Plugin {
     if (!lines?.includes('<{') || !file) return;
 
     try {
-      const markdown = await this.sectionMarkdownFor(file, markSection(section.text, section.lineStart, section.lineEnd));
+      const own = { start: section.lineStart, end: section.lineEnd };
+      const sections = this.sectionsWithBraces(file, section.text, own);
+      const index = sections.findIndex(({ start, end }) => start === own.start && end === own.end);
+      const markdown = (await this.sectionsMarkdownFor(file, markSections(section.text, sections), sections.length))[index];
       if (markdown === null) return;
 
       el.replaceChildren();
@@ -1065,13 +1073,27 @@ class RaindownPlugin extends Plugin {
     }
   }
 
-  // Reading view renders a section again each time it's shown, like switching to it, so its Markdown is kept until the
-  // note changes, and a render that's under way is shared. Failed renders aren't kept.
-  sectionMarkdownFor(file, markdown) {
+  // The note's sections with <{ }> in them, by their lines, as Obsidian's read them, or else only this one, as when
+  // Obsidian hasn't read the note since it changed, and its sections are where they were.
+  sectionsWithBraces(file, text, own) {
+    const lines = text.split('\n');
+    const sections = (this.app.metadataCache?.getFileCache?.(file)?.sections ?? [])
+      .map(({ position }) => ({ start: position.start.line, end: position.end.line }))
+      .filter(({ start, end }) => lines.slice(start, end + 1).join('\n').includes('<{'));
+    if (sections.some(({ start, end }) => start === own.start && end === own.end)) return sections;
+
+    return [own];
+  }
+
+  // Reading view renders a section again each time it's shown, like switching to it, so its sections' Markdown is kept
+  // until the note changes, and a render that's under way is shared, by each of its sections. Failed renders aren't
+  // kept.
+  sectionsMarkdownFor(file, markdown, count) {
     const key = `${file.path}\0${markdown}`;
     if (!this.sections.has(key)) {
       const note = { path: file.path, markdown, bare: this.settings.bareSyntax };
-      const rendered = this.engine.render(note, { timeout: TIMEOUT }).then(({ output }) => sectionMarkdown(output));
+      const rendered = this.engine.render(note, { timeout: TIMEOUT })
+        .then(({ output }) => Array.from({ length: count }, (_, index) => sectionMarkdown(output, index)));
       rendered.catch(() => this.sections.delete(key));
       this.sections.set(key, rendered);
       if (this.sections.size > SECTIONS_KEPT) this.sections.delete(this.sections.keys().next().value);
@@ -1260,5 +1282,5 @@ Object.assign(module.exports, {
   alignTables, applyRewrite, blockCommentChanges, carriedOnCell, cellToggleAt, changedLines, changedRange, changeOutsideHistory,
   directiveLines, DirectiveSuggest, directiveTokens, enteredCell, errorLine, hasDirectives, inFixedCell, inFormulaCell,
   movedCursor, onDirectiveLine, orphanedRows, rowDeletions, tabbedCell, tableAlignment, tableAlignmentChanges, tableFiles,
-  tableLines, markSection, sectionMarkdown, vaultPath
+  tableLines, markSections, sectionMarkdown, vaultPath
 });

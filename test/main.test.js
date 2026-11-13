@@ -863,3 +863,30 @@ test('shows a section with <{ }> in reading view as Raindown renders it, in Mark
   await raindown.renderSection(el, context(4));
   assert.equal(asked.length, 1);
 });
+
+test("renders all of a note's sections with <{ }> in reading view at once, as Obsidian read its sections", async () => {
+  const text = '# A\n\n<{ :toc }>\n\nText\n\n<{ title }>\n';
+  const { raindown } = await plugin();
+  const asked = [];
+  raindown.engine = {
+    ...fakeEngine(),
+    render: async (note) => {
+      asked.push(note.markdown);
+      return { output: note.markdown.replace('<{ :toc }>', '- [A](#a)').replace('<{ title }>', 'A') };
+    }
+  };
+  raindown.app.vault.getAbstractFileByPath = (path) => ({ path });
+  const lines = [[0, 0], [2, 2], [4, 4], [6, 6]];
+  raindown.app.metadataCache = {
+    getFileCache: () => ({ sections: lines.map(([start, end]) => ({ position: { start: { line: start }, end: { line: end } } })) })
+  };
+  const rendered = (line) => {
+    const el = { children: [], replaceChildren(...children) { this.children = children; } };
+    return raindown.renderSection(el, { sourcePath: 'note.md', getSectionInfo: () => ({ text, lineStart: line, lineEnd: line }) })
+      .then(() => el.children);
+  };
+
+  assert.deepEqual(await Promise.all([rendered(2), rendered(6)]), [['\n\n- [A](#a)\n\n'], ['\n\nA\n\n']]);
+  assert.equal(asked.length, 1);
+  assert.match(asked[0], /raindown:section 0 -->\n\n<\{ :toc \}>[\s\S]*raindown:section 1 -->\n\n<\{ title \}>/);
+});
