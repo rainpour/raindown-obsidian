@@ -66,7 +66,7 @@ class RaindownEngine {
       // in all.
       this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };
       console.debug('Raindown started', this.timings);
-      if (memory) console.log(`Ruby's memory once Raindown's loaded: ${(memory.total / 1e6).toFixed(2)} MB, ${(memory.used / 1e6).toFixed(2)} MB of it in non-zero pages, ${(memory.gzipped / 1e6).toFixed(2)} MB gzipped`);
+      if (memory) console.log(`Ruby's memory once Raindown's loaded: ${(memory.total / 1e6).toFixed(2)} MB, ${(memory.used / 1e6).toFixed(2)} MB of it in non-zero pages, ${(memory.gzipped / 1e6).toFixed(2)} MB gzipped; after GC.start and GC.compact, ${(memory.collected.used / 1e6).toFixed(2)} MB in non-zero pages, ${(memory.collected.gzipped / 1e6).toFixed(2)} MB gzipped`);
     })();
     this.starting.catch(() => this.stop());
 
