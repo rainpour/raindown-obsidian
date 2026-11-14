@@ -12,7 +12,8 @@
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
 #      Its source is then left empty, so only its bytecode's packed.
 #   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm. The module's
-#      built by scripts/ruby_wasm.rb the first time, with only the extensions Raindown uses, which takes a while.
+#      built by scripts/ruby_wasm.rb the first time, with only the extensions Raindown uses, and Ruby patched with
+#      wasm/patches, which takes a while.
 #   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did. It's
 #      skipped without Node, except in CI.
 # Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
@@ -71,12 +72,12 @@ def ruby_wasi
                                                  'ruby-3.4-wasm32-unknown-wasip1-full.tar.gz'), 'ruby-3.4-wasm32-unknown-wasip1-full')
 end
 
-# ruby.wasm's module, built with only the extensions Raindown uses, named by what it's built from, so a change to them
-# builds it again.
+# ruby.wasm's module, built with only the extensions Raindown uses, and Ruby's source patched with wasm/patches, named
+# by what it's built from, so a change to them builds it again.
 def ruby_module
   return File.expand_path(ENV['RUBY_WASM']) if ENV['RUBY_WASM']
 
-  inputs = %w[scripts/ruby_wasm.rb wasm/Gemfile.lock].map { File.read(File.join(ROOT, it)) }.join
+  inputs = [*%w[scripts/ruby_wasm.rb wasm/Gemfile.lock], *Dir.glob('wasm/patches/*', base: ROOT).sort].map { File.read(File.join(ROOT, it)) }.join
   path = File.join(BUILD, 'module', "ruby-#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
   return path if File.exist?(path)
 

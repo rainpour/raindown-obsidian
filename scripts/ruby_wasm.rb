@@ -7,12 +7,19 @@
 # are 2.6 MB of tables, as Raindown reads UTF-8, which every language's text in Obsidian is in. Ruby's
 # enc/make_encmake.rb takes them as --no-transes in ENCS, from the environment, as it was before Bundler loaded, which
 # rbwasm builds Ruby with, so this runs itself again with it. rbwasm doesn't count it in reusing a Ruby it built
-# before, so it's built clean. Then it strips its debug sections, as the npm package's is.
+# before, so it's built clean. Ruby's source is patched with wasm/patches, which make its jumps, like an exception, a
+# break or an ensure, many times faster in WebAssembly, and fix two leaks in them, as each patch says. rbwasm only
+# patches the source as it extracts it, so one extracted before is extracted again. Then it strips its debug sections,
+# as the npm package's is.
 # bin/build runs it, with wasm/Gemfile's gems:
 #   BUNDLE_GEMFILE=wasm/Gemfile RUBY_WASM_ROOT=build/ruby_wasm bundle exec ruby scripts/ruby_wasm.rb OUTPUT
+require 'fileutils'
 require 'ruby_wasm'
 require 'ruby_wasm/cli'
 require 'tmpdir'
+
+RUBY_VERSION_BUILT = '3.4'
+PATCHES = Dir[File.expand_path("../wasm/patches/ruby-#{RUBY_VERSION_BUILT}-*.patch", __dir__)].freeze
 
 TRANSCODERS_LEFT_OUT = %w[
   big5 chinese gb18030 gbk korean japanese japanese_euc japanese_sjis iso2022 emoji emoji_iso2022_kddi emoji_sjis_docomo
@@ -77,12 +84,15 @@ module Stripped
 end
 
 output = ARGV.fetch(0)
+# Ruby's source as rbwasm extracted it for a build before, with that build's patches, in rbwasm's root, as it finds it.
+FileUtils.rm_rf(File.join(File.expand_path(ENV['RUBY_WASM_ROOT'] || Bundler.root), 'build', 'checkouts', RUBY_VERSION_BUILT))
 Dir.mktmpdir do |dir|
   built = File.join(dir, 'ruby.wasm')
   RubyWasm::CLI.new(stdout: $stdout, stderr: $stderr).run(
-    ['build', '--ruby-version', '3.4', '--target', 'wasm32-unknown-wasip1', '--build-profile', 'full', '--no-stdlib',
-     '--clean', '-o', built]
+    ['build', '--ruby-version', RUBY_VERSION_BUILT, '--target', 'wasm32-unknown-wasip1', '--build-profile', 'full',
+     '--no-stdlib', '--clean', *PATCHES.flat_map { ['--patch', it] }, '-o', built]
   )
   File.binwrite(output, Stripped.module_bytes(File.binread(built)))
 end
-puts format('Built ruby.wasm: %.1f MB, with %s', File.size(output) / 1e6, EXTENSIONS.tr(',', ' '))
+puts format('Built ruby.wasm: %.1f MB, with %s, patched with %s', File.size(output) / 1e6, EXTENSIONS.tr(',', ' '),
+            PATCHES.map { File.basename(it) }.join(', '))
