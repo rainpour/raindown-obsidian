@@ -1,7 +1,7 @@
 {
   "id": "raindown",
   "name": "Raindown",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "minAppVersion": "1.4.0",
   "description": "Write back tables of contents, file lists, components and charts into your notes as you save them.",
   "author": "Raindeer",
