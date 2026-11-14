@@ -159,12 +159,17 @@ const componentRequests = {
     }
     return { nodes: Object.entries(components.classes).map(([name, node]) => ({ name, render: typeof node.prototype.render === 'function' })) };
   },
-  new({ id, name, args, props }) {
-    components.made[id] = new components.classes[name](props, ...args);
-    return {};
-  },
-  async call({ id, method, context, root: projectRoot }) {
-    return { value: await components.made[id][method]({ ...context, raindown: raindownServices(projectRoot, serviceAnswer) }) };
+  // Each call makes its component the first time, and answers apart, so one that throws doesn't fail the others.
+  async call({ calls }) {
+    const answers = calls.map(async ({ id, name, args, props, method, context, root: projectRoot }) => {
+      try {
+        components.made[id] ??= new components.classes[name](props, ...args);
+        return { value: await components.made[id][method]({ ...context, raindown: raindownServices(projectRoot, serviceAnswer) }) };
+      } catch (error) {
+        return { error: String(error?.message ?? error) };
+      }
+    });
+    return { answers: await Promise.all(answers) };
   }
 };
 
