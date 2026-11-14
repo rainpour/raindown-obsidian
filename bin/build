@@ -4,8 +4,9 @@
 # Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with only the Ruby files it loads into
 # ruby.wasm's module, Ruby compiled to WebAssembly, compressed with gzip, in Z85, with ruby.wasm's browser bundle and the worker
 # that runs it.
-#   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, and
-#      lists what it wrote and the standard library files and gems that loaded, in build/loaded.json.
+#   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, in the
+#      same Ruby as ruby.wasm's, and lists what it wrote and the standard library files and gems that loaded, in
+#      build/loaded.json.
 #   2. Those files, and src/engine.rb, are copied into build/root, as they'll be inside Ruby: the standard library at
 #      /usr/local/lib/ruby, each gem at /gems/NAME and the engine at /engine.
 #   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
@@ -14,11 +15,12 @@
 #   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm. The module's
 #      built by scripts/ruby_wasm.rb the first time, with only the extensions Raindown uses, and Ruby patched with
 #      wasm/patches, which takes a while.
-#   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did. It's
-#      skipped without Node, except in CI.
+#   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did, and
+#      scripts/jumps.js checks Ruby's jumps in the module are native Ruby's. They're skipped without Node, except in CI.
 # Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
 # ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM, and its
 # module's built there, or is RUBY_WASM, with rbwasm and the js gem from wasm/Gemfile.
+#   BUNDLE_GEMFILE=../raindown/Gemfile bundle install
 #   BUNDLE_GEMFILE=wasm/Gemfile bundle install
 #   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
 require 'digest'
@@ -27,13 +29,17 @@ require 'zlib'
 require 'json'
 
 RUBY_WASM_VERSION = '2.10.1'
+# Ruby's version in ruby.wasm, as its releases and npm package name it, and its standard library's folder.
+RUBY = '4.0'
+RUBY_LIB = "usr/local/lib/ruby/#{RUBY}.0"
 ROOT = File.expand_path('..', __dir__)
 BUILD = File.join(ROOT, 'build')
 STAGE = File.join(BUILD, 'root')
 RAINDOWN = File.expand_path(ENV.fetch('RAINDOWN_DIR', '../raindown'), ROOT)
 # Raindown's services for JavaScript nodes, which the worker answers, before its own code.
 SERVICES = File.join(RAINDOWN, 'lib', 'raindown', 'js', 'services.js')
-# The gems' Ruby is Raindown's own, which mise gives it, unless there's no mise, like in CI, with rbwasm installed into it.
+# Ruby is the plugin's .ruby-version, the same as ruby.wasm's, with Raindown's gems and rbwasm installed into it, which
+# mise gives it, unless there's no mise, like in CI.
 def mise_exec
   return [] unless system('mise', '--version', out: File::NULL, err: File::NULL)
 
@@ -68,8 +74,8 @@ def runtime(name, url)
 end
 
 def ruby_wasi
-  ENV['RUBY_WASI'] || File.join(runtime('wasi', "https://github.com/ruby/ruby.wasm/releases/download/#{RUBY_WASM_VERSION}/" \
-                                                 'ruby-3.4-wasm32-unknown-wasip1-full.tar.gz'), 'ruby-3.4-wasm32-unknown-wasip1-full')
+  ENV['RUBY_WASI'] || File.join(runtime("wasi-#{RUBY}", "https://github.com/ruby/ruby.wasm/releases/download/#{RUBY_WASM_VERSION}/" \
+                                                 "ruby-#{RUBY}-wasm32-unknown-wasip1-full.tar.gz"), "ruby-#{RUBY}-wasm32-unknown-wasip1-full")
 end
 
 # ruby.wasm's module, built with only the extensions Raindown uses, and Ruby's source patched with wasm/patches, named
@@ -104,7 +110,7 @@ def gzipped(path)
 end
 
 def ruby_npm
-  ENV['RUBY_NPM'] || File.join(runtime('npm', "https://registry.npmjs.org/@ruby/3.4-wasm-wasi/-/3.4-wasm-wasi-#{RUBY_WASM_VERSION}.tgz"),
+  ENV['RUBY_NPM'] || File.join(runtime("npm-#{RUBY}", "https://registry.npmjs.org/@ruby/#{RUBY}-wasm-wasi/-/#{RUBY}-wasm-wasi-#{RUBY_WASM_VERSION}.tgz"),
                                'package', 'dist')
 end
 
@@ -116,13 +122,14 @@ end
 # 1. What loads.
 loaded_file = File.join(BUILD, 'loaded.json')
 FileUtils.mkdir_p(BUILD)
-run(*BUNDLED, 'ruby', '-rrbconfig', '-I', File.join(ROOT, 'src'), File.join(ROOT, 'scripts', 'trace.rb'), loaded_file, chdir: RAINDOWN)
+run({ 'BUNDLE_GEMFILE' => File.join(RAINDOWN, 'Gemfile') }, *BUNDLED, 'ruby', '-rrbconfig', '-I', File.join(ROOT, 'src'),
+    File.join(ROOT, 'scripts', 'trace.rb'), loaded_file)
 loaded = JSON.parse(File.read(loaded_file))
 
 # 2. Staged as inside Ruby.
 FileUtils.rm_rf(STAGE)
-stdlib = File.join(ruby_wasi, 'usr', 'local', 'lib', 'ruby', '3.4.0')
-loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(STAGE, 'usr', 'local', 'lib', 'ruby', '3.4.0', it)) }
+stdlib = File.join(ruby_wasi, RUBY_LIB)
+loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(STAGE, RUBY_LIB, it)) }
 load_paths = ['/engine']
 loaded['gems'].each do |name, gem|
   # Only the files that loaded, and gem data, like unicode-display_width's tables, beside its code.
@@ -141,7 +148,7 @@ BEFORE_BYTECODE = %w[rbconfig.rb].freeze
 # rarely loaded, and they're compiled from source when they are.
 folders = %w[usr gems engine]
 if ENV['WASMTIME']
-  compiled = loaded['stdlib'].map { "/usr/local/lib/ruby/3.4.0/#{it}" } + ['/engine/engine.rb'] +
+  compiled = loaded['stdlib'].map { "/#{RUBY_LIB}/#{it}" } + ['/engine/engine.rb'] +
              loaded['gems'].flat_map { |name, gem| gem['files'].map { "/gems/#{name}/#{it}" } }
   File.write(File.join(BUILD, 'compile.txt'), compiled.join("\n"))
   run(ENV['WASMTIME'], 'run', '--dir', "#{STAGE}::/", '--dir', "#{File.join(ROOT, 'scripts')}::/scripts",
@@ -162,7 +169,7 @@ end
 # 4. Packed.
 wasm = File.join(BUILD, 'raindown.wasm')
 run(WASM_GEMS, *BUNDLED, 'rbwasm', 'pack', ruby_module, '-o', wasm,
-    *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] }, chdir: RAINDOWN)
+    *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] })
 
 # main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
 # WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
@@ -197,9 +204,11 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   module.exports = load('./plugin');
 JS
 puts format('Built main.js: %.2f MB, with Raindown packed into %.2f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
-# Node runs the smoke test, which CI has, so a release is always checked, but working on the plugin doesn't need it.
+# Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's. CI has
+# Node, so a release is always checked, but working on the plugin doesn't need it.
 if ENV['CI'] || system('node', '--version', out: File::NULL, err: File::NULL)
   run('node', File.join(ROOT, 'scripts', 'smoke.js'))
+  run(*MISE, 'node', File.join(ROOT, 'scripts', 'jumps.js'), wasm, File.join(ruby_npm, 'browser.umd.js'))
 else
   puts 'Smoke test skipped: no Node, which CI runs it with'
 end

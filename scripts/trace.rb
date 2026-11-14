@@ -114,7 +114,7 @@ lib = RbConfig::CONFIG['rubylibdir']
 
 # A file's path in WebAssembly's Ruby, as bin/build packs it, when it's packed.
 def packed_path(file, lib, gems)
-  return "/usr/local/lib/ruby/3.4.0/#{file.delete_prefix("#{lib}/")}" if file.start_with?("#{lib}/")
+  return "/usr/local/lib/ruby/#{RbConfig::CONFIG['ruby_version']}/#{file.delete_prefix("#{lib}/")}" if file.start_with?("#{lib}/")
 
   name, gem = gems.find { |_, gem| file.start_with?("#{gem['root']}/") }
   "/gems/#{name}/#{file.delete_prefix("#{gem['root']}/")}" if gem

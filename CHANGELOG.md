@@ -29,7 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `<{ }>` in reading view is rendered by Obsidian, from Raindown's Markdown
 - Typing in a `table:` table's fixed column saves on Enter, Tab or Cmd+S, not as you type
 - A note's JavaScript components are asked for what they write together, and one that can't be loaded leaves the others working, with Raindown v0.21.0
-- Raindown starts about a quarter sooner, and writes a note back in half the time or less, as its Ruby's patched to catch exceptions, `break` and `ensure` without unwinding its whole stack in WebAssembly
+- Raindown runs on Ruby 4.0, in place of 3.4
+- Raindown loads in two thirds of the time, and writes back a note of components up to twice as fast, as its Ruby's patched to catch exceptions, `break` and `ensure` without unwinding its whole stack in WebAssembly
 - A vault's Ruby nodes run faster: iterating a hash, `Mutex#synchronize`, `catch`, `require`, comparing arrays and reading the vault's files are 3 to 13 times faster
 
 ### Removed

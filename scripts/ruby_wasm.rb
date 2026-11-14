@@ -8,7 +8,7 @@
 # enc/make_encmake.rb takes them as --no-transes in ENCS, from the environment, as it was before Bundler loaded, which
 # rbwasm builds Ruby with, so this runs itself again with it. rbwasm doesn't count it in reusing a Ruby it built
 # before, so it's built clean. Ruby's source is patched with wasm/patches, which make its jumps, like an exception, a
-# break or an ensure, many times faster in WebAssembly, and fix two leaks in them, as each patch says. rbwasm only
+# break or an ensure, many times faster in WebAssembly, as each patch says. rbwasm only
 # patches the source as it extracts it, so one extracted before is extracted again. Then it strips its debug sections,
 # as the npm package's is.
 # bin/build runs it, with wasm/Gemfile's gems:
@@ -18,7 +18,7 @@ require 'ruby_wasm'
 require 'ruby_wasm/cli'
 require 'tmpdir'
 
-RUBY_VERSION_BUILT = '3.4'
+RUBY_VERSION_BUILT = '4.0'
 PATCHES = Dir[File.expand_path("../wasm/patches/ruby-#{RUBY_VERSION_BUILT}-*.patch", __dir__)].freeze
 
 TRANSCODERS_LEFT_OUT = %w[
@@ -26,8 +26,11 @@ TRANSCODERS_LEFT_OUT = %w[
   emoji_sjis_kddi emoji_sjis_softbank utf8_mac
 ].join(' ')
 ENCS = "--no-transes='#{TRANSCODERS_LEFT_OUT}'".freeze
-unless Bundler.original_env['ENCS'] == ENCS
-  Bundler.with_original_env { exec({ 'ENCS' => ENCS }, 'bundle', 'exec', 'ruby', __FILE__, *ARGV) }
+# Ruby 4.0's psych takes libyaml from pkg-config before the one rbwasm built for WebAssembly, and pkg-config finds this
+# computer's, like Homebrew's, which can't be linked. With nowhere to look, a folder that isn't there, it finds none.
+BUILD_ENV = { 'ENCS' => ENCS, 'PKG_CONFIG_LIBDIR' => File.join(__dir__, 'no-pkg-config') }.freeze
+unless Bundler.original_env.slice(*BUILD_ENV.keys) == BUILD_ENV
+  Bundler.with_original_env { exec(BUILD_ENV, 'bundle', 'exec', 'ruby', __FILE__, *ARGV) }
 end
 
 EXTENSIONS = %w[
@@ -44,6 +47,21 @@ module RaindownExtensions
   end
 end
 RubyWasm::CLI.prepend(RaindownExtensions)
+
+# The Ruby rbwasm builds for this computer, to build WebAssembly's with, as rbwasm builds it, but without OpenSSL, which
+# building Ruby doesn't use, and Ruby 4.0.0's doesn't compile with OpenSSL 4, which Homebrew has.
+module HostRubyWithoutOpenSSL
+  def build(executor)
+    executor.mkdir_p(product_build_dir)
+    @source.build(executor)
+    return if Dir.exist?(install_dir)
+
+    executor.system(@source.configure_file, "--prefix=#{install_dir}", '--disable-install-doc', '--with-out-ext=openssl',
+                    chdir: product_build_dir)
+    executor.system('make', "-j#{executor.process_count}", 'install', chdir: product_build_dir)
+  end
+end
+RubyWasm::BaseRubyProduct.prepend(HostRubyWithoutOpenSSL)
 
 # A WebAssembly module's bytes without its custom sections for debugging: DWARF's, named .debug_*, and its functions'
 # names.

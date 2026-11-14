@@ -1,30 +1,26 @@
-Ruby 3.4's jumps in WebAssembly, for the plugin's ruby.wasm, which scripts/ruby_wasm.rb builds with this.
+Ruby 4.0's jumps in WebAssembly, for the plugin's ruby.wasm, which scripts/ruby_wasm.rb builds with this.
 
 WebAssembly has no setjmp, so Ruby's is Asyncify's: it unwinds every call frame to the root and rewinds them, to
 capture where it is, each time it's called. Ruby's vm_exec avoids that, catching a jump as it unwinds past, but the
-rest of Ruby called setjmp for each rb_ensure, rb_protect, rb_rescue and rb_block_call, each catch, each require,
+rest of Ruby calls setjmp for each rb_ensure, rb_protect, rb_rescue and rb_block_call, each catch, each require,
 each raise, each == or inspect of an array or hash, and each time a file's read, written or looked for. So Hash#each
-took 25 times as long as native Ruby, and Mutex#synchronize 35 times, where Ruby's own code takes 2 to 3 times as long.
+takes 25 times as long as native Ruby, and Mutex#synchronize 35 times, where Ruby's own code takes 2 to 3 times as long.
 
 1. A tag's function is run by rb_wasm_ec_tag_run, in eval_intern.h, which catches a jump as vm_exec does, without
-   setjmp, for: rb_ensure, rb_protect, rb_vrescue2 and setup_exception, in eval.c, rb_iterate0 and vm_catch_protect,
-   in vm_eval.c, exec_recursive and rb_thread_io_blocking_call, in thread.c, and require_internal, in load.c. A
-   write-back calls setjmp no times now, where it called it 13 to 155 times, and starting Raindown 19 times, not 4,400.
+   setjmp, for: rb_ec_ensure, rb_protect, rb_vrescue2 and setup_exception, in eval.c, rb_iterate0 and
+   vm_catch_protect, in vm_eval.c, exec_recursive and rb_thread_io_blocking_call, in thread.c, and require_internal,
+   in load.c.
 2. A blocking call no longer saves the registers with setjmp, in internal/thread.h, which is for another thread's
    garbage collection, and WebAssembly runs one thread.
-3. A jump out of a block or method called from C frees its tag's buffer, in vm.c, 24 KB that Ruby 3.4.1 leaked each
-   time, so a loop of break, return, throw or raise through a C method, like Range#each, slowed as it ran, to
-   hundreds of microseconds each.
-4. The stack pointer's restored when a jump's caught, in wasm/setjmp.c, as the frames it unwinds never run their
-   epilogues. Each rescued exception kept its stack until the method returned, which a Fiber's small stack ran out of
-   after a few thousand, with SystemStackError, and the plugin answers each request in a Fiber.
-5. Tags' buffers are kept to use again, in vm_core.h, rather than allocated for each call of a block from C.
+3. Tags' buffers are kept to use again, in vm_core.h and vm.c, rather than allocated for each call of a block from C.
 
-To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then diff it against its tarball's.
+Each is inside #if defined(__wasm__) && !defined(__EMSCRIPTEN__), beside Ruby's own code, which is left as it is.
+
+To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/4.0, then diff it against its tarball's.
 
 --- a/eval.c
 +++ b/eval.c
-@@ -539,7 +539,42 @@
+@@ -516,7 +516,42 @@
      return mesg;
  }
  
@@ -67,7 +63,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  setup_exception(rb_execution_context_t *ec, enum ruby_tag_type tag, volatile VALUE mesg, VALUE cause)
  {
      VALUE e;
-@@ -551,6 +586,12 @@
+@@ -528,6 +563,12 @@
          volatile int state = 0;
  
          EC_PUSH_TAG(ec);
@@ -80,7 +76,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
          if (EC_EXEC_TAG() == TAG_NONE && !(state = rb_ec_set_raised(ec))) {
              VALUE bt = rb_get_backtrace(mesg);
              if (!NIL_P(bt) || UNDEF_P(cause)) {
-@@ -568,6 +609,7 @@
+@@ -545,6 +586,7 @@
              }
              rb_ec_reset_raised(ec);
          }
@@ -88,10 +84,12 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
          EC_POP_TAG();
          file = file0;
          if (state) goto fatal;
-@@ -973,11 +1015,98 @@
+@@ -1044,6 +1086,72 @@
+     VALUE ret = rb_vrescue2(b_proc, data1, r_proc, data2, ap);
+     va_end(ap);
      return ret;
- }
- 
++}
++
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 +struct rescue_run {
 +    rb_execution_context_t *ec;
@@ -156,10 +154,10 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +        }
 +    }
 +    run->state = state;
-+}
-+
+ }
+ 
  VALUE
- rb_vrescue2(VALUE (* b_proc) (VALUE), VALUE data1,
+@@ -1051,6 +1159,27 @@
              VALUE (* r_proc) (VALUE, VALUE), VALUE data2,
              va_list args)
  {
@@ -187,7 +185,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
      enum ruby_tag_type state;
      rb_execution_context_t * volatile ec = GET_EC();
      rb_control_frame_t *volatile cfp = ec->cfp;
-@@ -1032,6 +1161,7 @@
+@@ -1105,6 +1234,7 @@
  
      return result;
  }
@@ -195,10 +193,12 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  
  VALUE
  rb_rescue(VALUE (* b_proc)(VALUE), VALUE data1,
-@@ -1041,9 +1171,69 @@
+@@ -1112,8 +1242,67 @@
+ {
+     return rb_rescue2(b_proc, data1, r_proc, data2, rb_eStandardError,
                        (VALUE)0);
- }
- 
++}
++
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 +struct protect_run {
 +    rb_execution_context_t *ec;
@@ -223,9 +223,9 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +    }
 +}
 +
- VALUE
- rb_protect(VALUE (* proc) (VALUE), VALUE data, int *pstate)
- {
++VALUE
++rb_protect(VALUE (* proc) (VALUE), VALUE data, int *pstate)
++{
 +    rb_execution_context_t *ec = GET_EC();
 +    struct protect_run run = { ec, ec->cfp, proc, data, Qnil, TAG_NONE };
 +
@@ -235,13 +235,12 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +
 +    if (pstate != NULL) *pstate = run.state;
 +    return run.result;
-+}
-+
+ }
+ 
 +VALUE
-+rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
++rb_ec_ensure(rb_execution_context_t *ec, VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
 +{
 +    VALUE errinfo;
-+    rb_execution_context_t *ec = GET_EC();
 +    /* without a frame to rewind to, as a jump's passed on once e_proc's run */
 +    struct protect_run run = { ec, NULL, b_proc, data1, Qnil, TAG_NONE };
 +
@@ -259,20 +258,17 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +    return run.result;
 +}
 +#else
-+VALUE
-+rb_protect(VALUE (* proc) (VALUE), VALUE data, int *pstate)
-+{
-     volatile VALUE result = Qnil;
-     volatile enum ruby_tag_type state;
-     rb_execution_context_t * volatile ec = GET_EC();
-@@ -1084,6 +1274,7 @@
+ VALUE
+ rb_protect(VALUE (* proc) (VALUE), VALUE data, int *pstate)
+ {
+@@ -1156,6 +1345,7 @@
          EC_JUMP_TAG(ec, state);
      return result;
  }
 +#endif
  
- static ID
- frame_func_id(const rb_control_frame_t *cfp)
+ VALUE
+ rb_ensure(VALUE (*b_proc)(VALUE), VALUE data1, VALUE (*e_proc)(VALUE), VALUE data2)
 --- a/eval_intern.h
 +++ b/eval_intern.h
 @@ -159,7 +159,50 @@
@@ -328,9 +324,9 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  */
 --- a/internal/thread.h
 +++ b/internal/thread.h
-@@ -14,12 +14,23 @@
- 
+@@ -15,12 +15,23 @@
  struct rb_thread_struct;        /* in vm_core.h */
+ struct rb_io;
  
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 +/*
@@ -354,7 +350,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  #define COVERAGE_INDEX_LINES    0
 --- a/load.c
 +++ b/load.c
-@@ -1238,6 +1238,72 @@
+@@ -1281,6 +1281,74 @@
   * <0: not found (LoadError)
   * >1: exception
   */
@@ -362,6 +358,8 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +struct require_run {
 +    rb_execution_context_t *ec;
 +    rb_thread_t *th;
++    const rb_box_t *box;
++    VALUE fname;
 +    VALUE path;
 +    volatile VALUE *saved_path;
 +    char *volatile *ftptr;
@@ -369,7 +367,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +    VALUE realpaths;
 +    VALUE realpath_map;
 +    volatile bool *reset_ext_config;
-+    struct rb_ext_config *prev_ext_config;
++    volatile struct rb_ext_config *prev_ext_config;
 +    volatile int *result;
 +    bool warn;
 +    enum ruby_tag_type state;
@@ -380,6 +378,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +{
 +    struct require_run *run = arg;
 +    rb_thread_t *th = run->th;
++    const rb_box_t *box = run->box;
 +    VALUE path = run->path;
 +    VALUE handle;
 +    int found;
@@ -387,17 +386,17 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +    run->state = state;
 +    if (state != TAG_NONE) return;
 +
-+    found = search_required(th->vm, path, (VALUE *)run->saved_path, rb_feature_p);
++    found = search_required(box, path, run->saved_path, rb_feature_p);
 +    path = *run->saved_path;
 +
 +    if (found) {
-+        if (!path || !(*run->ftptr = load_lock(th->vm, RSTRING_PTR(path), run->warn))) {
++        if (!path || !(*run->ftptr = load_lock(box, RSTRING_PTR(path), run->warn))) {
 +            *run->result = 0;
 +        }
 +        else if (!**run->ftptr) {
 +            *run->result = TAG_RETURN;
 +        }
-+        else if (found == 's' && run_static_ext_init(th->vm, RSTRING_PTR(path))) {
++        else if (found == 's' && RTEST(rb_vm_call_cfunc_in_box(Qnil, run_static_ext_init, (VALUE)th->vm, path, path, box))) {
 +            *run->result = TAG_RETURN;
 +        }
 +        else if (RTEST(rb_hash_aref(run->realpaths,
@@ -413,9 +412,8 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +              case 's':
 +                *run->reset_ext_config = true;
 +                ext_config_push(th, run->prev_ext_config);
-+                handle = rb_vm_call_cfunc(rb_vm_top_self(), load_ext,
-+                                          path, VM_BLOCK_HANDLER_NONE, path);
-+                rb_hash_aset(ruby_dln_libmap, path, SVALUE2NUM((SIGNED_VALUE)handle));
++                handle = rb_vm_call_cfunc_in_box(box->top_self, load_ext, path, run->fname, path, box);
++                rb_hash_aset(box->ruby_dln_libmap, path, PTR2NUM(handle));
 +                break;
 +            }
 +            *run->result = TAG_RETURN;
@@ -427,13 +425,13 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  static int
  require_internal(rb_execution_context_t *ec, VALUE fname, int exception, bool warn)
  {
-@@ -1267,6 +1333,14 @@
+@@ -1312,6 +1380,14 @@
      EC_PUSH_TAG(ec);
      ec->errinfo = Qnil; /* ensure */
      th->top_wrapper = 0;
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 +    struct require_run run = {
-+        saved.ec, th, path, &saved_path, &ftptr, &realpath, realpaths, realpath_map,
++        saved.ec, th, box, fname, path, &saved_path, &ftptr, &realpath, realpaths, realpath_map,
 +        &reset_ext_config, &prev_ext_config, &result, warn, TAG_NONE
 +    };
 +    rb_wasm_ec_tag_run(ec, &_tag, require_run, &run);
@@ -442,7 +440,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
      if ((state = EC_EXEC_TAG()) == TAG_NONE) {
          VALUE handle;
          int found;
-@@ -1308,6 +1382,7 @@
+@@ -1352,6 +1428,7 @@
              }
          }
      }
@@ -452,7 +450,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
      ec = saved.ec;
 --- a/thread.c
 +++ b/thread.c
-@@ -1797,7 +1797,45 @@
+@@ -1949,7 +1949,47 @@
  {
      rb_thread_t *th = rb_thread_ptr(thval);
      return th->mn_schedulable;
@@ -461,11 +459,11 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
 +struct io_blocking_run {
 +    rb_execution_context_t *ec;
++    rb_thread_t *th;
 +    rb_blocking_function_t *func;
 +    void *data1;
 +    int fd;
 +    int events;
-+    struct waiting_fd *waiting_fd;
 +    VALUE val;
 +    int saved_errno;
 +    enum ruby_tag_type state;
@@ -475,35 +473,37 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
 +io_blocking_run(void *arg, enum ruby_tag_type state)
 +{
 +    struct io_blocking_run *run = arg;
-+    rb_thread_t *th;
++    rb_thread_t *th = run->th;
 +
 +    run->state = state;
 +    if (state != TAG_NONE) return;
 +
 +  retry:
-+    BLOCKING_REGION(run->waiting_fd->th, {
++    BLOCKING_REGION(th, {
 +        run->val = run->func(run->data1);
 +        run->saved_errno = errno;
-+    }, ubf_select, run->waiting_fd->th, FALSE);
++    }, ubf_select, th, FALSE);
 +
-+    th = rb_ec_thread_ptr(run->ec);
++    RUBY_ASSERT(th == rb_ec_thread_ptr(run->ec));
 +    if (run->events &&
 +        blocking_call_retryable_p((int)run->val, run->saved_errno) &&
 +        thread_io_wait_events(th, run->fd, run->events, NULL)) {
 +        RUBY_VM_CHECK_INTS_BLOCKING(run->ec);
 +        goto retry;
 +    }
++
++    RUBY_VM_CHECK_INTS_BLOCKING(run->ec);
  }
 +#endif
  
  VALUE
- rb_thread_io_blocking_call(rb_blocking_function_t *func, void *data1, int fd, int events)
-@@ -1823,6 +1861,13 @@
-     thread_io_setup_wfd(th, fd, &waiting_fd);
+ rb_thread_io_blocking_call(struct rb_io* io, rb_blocking_function_t *func, void *data1, int events)
+@@ -1980,6 +2020,13 @@
+ 
      {
          EC_PUSH_TAG(ec);
 +#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
-+        struct io_blocking_run run = { ec, func, data1, fd, events, &waiting_fd, Qundef, 0, TAG_NONE };
++        struct io_blocking_run run = { ec, th, func, data1, fd, events, Qundef, 0, TAG_NONE };
 +        rb_wasm_ec_tag_run(ec, &_tag, io_blocking_run, &run);
 +        val = run.val;
 +        saved_errno = run.saved_errno;
@@ -512,15 +512,15 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
          if ((state = EC_EXEC_TAG()) == TAG_NONE) {
              volatile enum ruby_tag_type saved_state = state; /* for BLOCKING_REGION */
            retry:
-@@ -1840,6 +1885,7 @@
-             }
+@@ -2000,6 +2047,7 @@
+ 
              state = saved_state;
          }
 +#endif
          EC_POP_TAG();
  
          th = rb_ec_thread_ptr(ec);
-@@ -5264,6 +5310,27 @@
+@@ -5500,6 +5548,27 @@
   * list[recursive_key] is used as a flag for the outermost call.
   */
  
@@ -548,7 +548,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  static VALUE
  exec_recursive(VALUE (*func) (VALUE, VALUE, int), VALUE obj, VALUE pairid, VALUE arg, int outer, ID mid)
  {
-@@ -5303,9 +5370,16 @@
+@@ -5539,9 +5608,16 @@
              volatile VALUE ret = Qundef;
              recursive_push(p.list, p.obj, p.pairid);
              EC_PUSH_TAG(GET_EC());
@@ -567,29 +567,19 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
                  goto invalid;
 --- a/vm.c
 +++ b/vm.c
-@@ -2538,6 +2538,9 @@
- 
+@@ -2742,6 +2742,9 @@
  // for non-Emscripten Wasm build, use vm_exec with optimized setjmp for runtime performance
  #if defined(__wasm__) && !defined(__EMSCRIPTEN__)
-+
+ 
 +void *rb_wasm_jmpbuf_pool;
 +int rb_wasm_jmpbuf_pooled;
- 
++
  struct rb_vm_exec_context {
      rb_execution_context_t *const ec;
-@@ -2829,6 +2832,9 @@
-             if (VM_FRAME_FINISHED_P(ec->cfp)) {
-                 rb_vm_pop_frame(ec);
-                 ec->errinfo = (VALUE)err;
-+                /* vm_exec's tag is popped here, not by its EC_POP_TAG(), which the jump passes, so its buffer's
-+                   freed here too, or each jump out of a block or method called from C would leak it. */
-+                rb_vm_tag_jmpbuf_deinit(&ec->tag->buf);
-                 ec->tag = ec->tag->prev;
-                 EC_JUMP_TAG(ec, state);
-             }
+     struct rb_vm_tag *const tag;
 --- a/vm_core.h
 +++ b/vm_core.h
-@@ -956,17 +956,42 @@
+@@ -967,17 +967,42 @@
  typedef rb_jmpbuf_t *rb_vm_tag_jmpbuf_t;
  
  #define RB_VM_TAG_JMPBUF_GET(buf) (*buf)
@@ -636,7 +626,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  typedef rb_jmpbuf_t rb_vm_tag_jmpbuf_t;
 --- a/vm_eval.c
 +++ b/vm_eval.c
-@@ -1440,12 +1440,78 @@
+@@ -1469,12 +1469,78 @@
  static const char *
  vm_frametype_name(const rb_control_frame_t *cfp);
  #endif
@@ -715,7 +705,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
      enum ruby_tag_type state;
      volatile VALUE retval = Qnil;
      rb_control_frame_t *const cfp = ec->cfp;
-@@ -1494,6 +1560,7 @@
+@@ -1523,6 +1589,7 @@
      }
      return retval;
  }
@@ -723,7 +713,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  
  static VALUE
  rb_iterate_internal(VALUE (* it_proc)(VALUE), VALUE data1,
-@@ -2521,8 +2588,57 @@
+@@ -2636,8 +2703,57 @@
  {
      VALUE vtag = tag ? rb_sym_intern_ascii_cstr(tag) : rb_obj_alloc(rb_cObject);
      return rb_catch_obj(vtag, func, data);
@@ -781,7 +771,7 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  static VALUE
  vm_catch_protect(VALUE tag, rb_block_call_func *func, VALUE data,
                   enum ruby_tag_type *stateptr, rb_execution_context_t *volatile ec)
-@@ -2551,6 +2667,7 @@
+@@ -2666,6 +2782,7 @@
  
      return val;
  }
@@ -789,46 +779,3 @@ To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/3.4, then di
  
  VALUE
  rb_catch_protect(VALUE t, rb_block_call_func *func, VALUE data, enum ruby_tag_type *stateptr)
---- a/wasm/setjmp.c
-+++ b/wasm/setjmp.c
-@@ -143,6 +143,7 @@
-     try_catch->try_f = try_f;
-     try_catch->catch_f = catch_f;
-     try_catch->context = context;
-+    try_catch->stack_pointer = NULL;
- }
- 
- // NOTE: This function is not processed by Asyncify due to a call of asyncify_stop_rewind
-@@ -154,6 +155,11 @@
- 
-     target->state = JMP_BUF_STATE_CAPTURED;
- 
-+    // Kept the first time, as when it's called again to rewind, the stack pointer is where the unwinding began.
-+    if (!try_catch->stack_pointer) {
-+        try_catch->stack_pointer = rb_wasm_get_stack_pointer();
-+    }
-+
-     switch ((enum try_catch_phase)try_catch->state) {
-     case TRY_CATCH_PHASE_MAIN:
-         // may unwind
-@@ -179,6 +185,9 @@
-             _rb_wasm_active_jmpbuf = NULL;
-             // reset jmpbuf state to be able to unwind again
-             target->state = JMP_BUF_STATE_CAPTURED;
-+            // The frames unwound from never ran their epilogues, which restore the stack pointer, so each jump
-+            // caught here would keep their stack until this function's caller returned.
-+            rb_wasm_set_stack_pointer(try_catch->stack_pointer);
-             // move to catch loop phase
-             try_catch->state = TRY_CATCH_PHASE_RESCUE;
-             if (try_catch->catch_f) {
---- a/wasm/setjmp.h
-+++ b/wasm/setjmp.h
-@@ -66,6 +66,8 @@
-     rb_wasm_try_catch_func_t catch_f;
-     void *context;
-     int state;
-+    // The stack pointer try_f was called with, which catch_f is called with too
-+    void *stack_pointer;
- };
- 
- //
