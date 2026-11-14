@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The plugin is less than half the size, about 4 MB, and Raindown starts in about half the time
 - `<{ }>` in reading view is rendered by Obsidian, from Raindown's Markdown
 - Typing in a `table:` table's fixed column saves on Enter, Tab or Cmd+S, not as you type
+- A note's JavaScript components are asked for what they write together, and one that can't be loaded leaves the others working, with Raindown v0.21.0
 
 ### Removed
 
