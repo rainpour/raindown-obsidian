@@ -22,7 +22,7 @@
 # module's built there, or is RUBY_WASM, with rbwasm and the js gem from wasm/Gemfile.
 #   BUNDLE_GEMFILE=../raindown/Gemfile bundle install
 #   BUNDLE_GEMFILE=wasm/Gemfile bundle install
-#   [RAINDOWN_DIR=../raindown] [WASMTIME=path/to/wasmtime] bin/build
+#   BUNDLE_GEMFILE=wasm/Gemfile RAINDOWN_DIR=../raindown WASMTIME=~/.wasmtime/bin/wasmtime bundle exec bin/build
 require 'digest'
 require 'fileutils'
 require 'zlib'
