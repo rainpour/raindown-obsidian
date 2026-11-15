@@ -122,8 +122,15 @@ end
 # 1. What loads.
 loaded_file = File.join(BUILD, 'loaded.json')
 FileUtils.mkdir_p(BUILD)
-run({ 'BUNDLE_GEMFILE' => File.join(RAINDOWN, 'Gemfile') }, *BUNDLED, 'ruby', '-rrbconfig', '-I', File.join(ROOT, 'src'),
-    File.join(ROOT, 'scripts', 'trace.rb'), loaded_file)
+run(
+  { 'BUNDLE_GEMFILE' => File.join(RAINDOWN, 'Gemfile') },
+  *BUNDLED,
+  'ruby',
+  '-rrbconfig',
+  '-I',
+  File.join(ROOT, 'src'),
+  File.join(ROOT, 'scripts', 'trace.rb'), loaded_file
+)
 loaded = JSON.parse(File.read(loaded_file))
 
 # 2. Staged as inside Ruby.
@@ -180,10 +187,17 @@ end
 abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" unless browser.include?('Object.assign(exports, { RubyVM')
 worker = [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
 compressed = gzipped(wasm)
-runtime = { wasm: z85(compressed), wasmSize: compressed.bytesize, worker:, loadPaths: load_paths }
-sources = { './runtime' => "module.exports = #{JSON.generate(runtime)};",
-            './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
-            './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js')) }
+runtime = {
+  wasm: z85(compressed),
+  wasmSize: compressed.bytesize,
+  worker:,
+  loadPaths: load_paths
+}
+sources = {
+  './runtime' => "module.exports = #{JSON.generate(runtime)};",
+  './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
+  './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js'))
+}
 modules = sources.map { |name, code| "#{JSON.generate(name)}: function (module, exports, require) {\n#{code}\n}" }
 File.write(File.join(ROOT, 'main.js'), <<~JS)
   'use strict';
@@ -204,8 +218,8 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   module.exports = load('./plugin');
 JS
 puts format('Built main.js: %.2f MB, with Raindown packed into %.2f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
-# Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's. CI has
-# Node, so a release is always checked, but working on the plugin doesn't need it.
+# Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's.
+# CI has Node, so a release is always checked, but working on the plugin doesn't need it.
 if ENV['CI'] || system('node', '--version', out: File::NULL, err: File::NULL)
   run('node', File.join(ROOT, 'scripts', 'smoke.js'))
   run(*MISE, 'node', File.join(ROOT, 'scripts', 'jumps.js'), wasm, File.join(ruby_npm, 'browser.umd.js'))
