@@ -3,6 +3,15 @@
 require 'json'
 require 'raindown/editing'
 
+class Object
+  def each(&block)
+    return enum_for(:each) unless block_given?
+
+    # Pass the Ruby block directly to JS; the js gem wraps it as a callable function
+    JS.global.jsEach(self, block)
+  end
+end
+
 # What the plugin's worker asks of Raindown, running in Ruby compiled to WebAssembly: a note written back, as
 # "raindown server" answers it, or rendered as Markdown, for reading view. The request is a file, /request.json, so the note's never quoted into Ruby code, and the
 # vault is at /vault, as the worker mirrors it.

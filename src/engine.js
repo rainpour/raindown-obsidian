@@ -14,6 +14,13 @@ const START_TIMEOUT = 60000;
 // endpoint can't request, as with curl in Raindown.
 const LINK_LOCAL = /^(?:169\.254\.\d+\.\d+|\[(?:fe[89ab][0-9a-f]:[^\]]*|::ffff:a9fe:[0-9a-f]+)\])$/i;
 
+globalThis.jsEach = function(jsArray, rubyCallback) {
+  for (let i = 0; i < jsArray.length; i++) {
+    // Invokes the Ruby block with the current item
+    rubyCallback(jsArray[i]);
+  }
+};
+
 class RaindownEngine {
   // runtime gives what bin/build embeds in main.js: the module, the worker's code and the load path. requestUrl sends
   // endpoints' requests, as Obsidian's does.

@@ -4,7 +4,7 @@
 // classes the build adds to it. It starts Ruby once, from the module bin/build packed Raindown into, with the vault
 // mirrored at /vault in Ruby's in-memory folder, then writes back each note it's asked to on the Ruby it kept running, so
 // Obsidian never waits for it. Ruby can't wait for Obsidian to read a file, so the plugin sends the vault's files ahead,
-// and each change to them, and gets back the files Raindown wrote, like a table's CSV. Raindown's told which changed at
+// and each change to them, and gets back the files Raindown wrote, like a table's CSV. Raindown is told which changed at
 // each write-back, and given the front matter Obsidian's already read, so it never reads or checks every note itself.
 // Ruby waits on the worker for what it can't do in WebAssembly: an endpoint's request, which Obsidian sends, a
 // project's JavaScript Components, which run here, and Raindown's services, for its Ruby and JavaScript nodes, which
