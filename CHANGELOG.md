@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A vault's Ruby nodes run faster: iterating a hash, `Mutex#synchronize`, `catch`, `require`, comparing arrays and reading the vault's files are 3 to 13 times faster
 - Ruby starts about 150 ms sooner, as its shape tree's 280 MB is no longer allocated and zeroed as it starts
 - Ruby runs 1.5 to 2 times as fast where Obsidian has JSPI, as on desktop, as it's built without Asyncify there, and starts in three quarters of the time
+- On desktop, notes write back 15 to 25% faster, and Raindown starts sooner, as Ruby collects its garbage between notes, and starts again if a heavy note's left it using more than 512 MB
 
 ### Removed
 

@@ -35,7 +35,9 @@ Switching Fibers and calling blocks from C cost little, as [bench/switches.rb](b
 
 ## Collecting only between requests
 
-Spilling's cost is in Ruby's C, not its VM: without `--spill-pointers`, [bench/idle.rb](bench/idle.rb), collecting between rounds, loops over arrays and hashes take 15 to 30% less time, allocating 300,000 objects 99 ms rather than 120, and garbage collection less than half as long, while a `while` loop and `fib` take the same. [ruby-4.0-jspi-idle-gc.patch](ruby-4.0-jspi-idle-gc.patch), with [idle-gc-plugin.diff](idle-gc-plugin.diff)'s build and worker, builds the module without it, and collects only in `rb_wasm_jspi_gc`, which the worker calls after each answer, with no Ruby on the stack, and not while a Fiber's suspended. It writes back the smoke test's notes as native Raindown does, and passes the jumps suite. With [notes.js](notes.js), in Node 26:
+The plugin's module without Asyncify does this now, with [ruby-4.0-jspi-idle-gc.patch](../../patches/jspi/ruby-4.0-jspi-idle-gc.patch), and the engine starts Ruby again once its memory's past 512 MB.
+
+Spilling's cost is in Ruby's C, not its VM: without `--spill-pointers`, [bench/idle.rb](bench/idle.rb), collecting between rounds, loops over arrays and hashes take 15 to 30% less time, allocating 300,000 objects 99 ms rather than 120, and garbage collection less than half as long, while a `while` loop and `fib` take the same. Its patch builds the module without it, and collects only in `rb_wasm_jspi_gc`, which the worker calls after each answer, with no Ruby on the stack, and not while a Fiber's suspended. It writes back the smoke test's notes as native Raindown does, and passes the jumps suite. With [notes.js](notes.js), in Node 26:
 
 | What                              | Spilled     | Collecting between requests |
 | --------------------------------- | ----------- | --------------------------- |

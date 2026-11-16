@@ -3,7 +3,8 @@
 # Ruby's jumps, like an exception, a break, a throw or an ensure, through its C, where wasm/patches changes how
 # they're caught in WebAssembly: each case's result, a line each, which scripts/jumps.js checks is the same in the
 # plugin's ruby.wasm, run directly and in a Fiber, as in native Ruby. The last cases run under GC.stress, as garbage
-# collection reads the stack by unwinding it, through the same code. It's evaluated, with IN_FIBER set before it, as
+# collection reads the stack by unwinding it, through the same code, with Asyncify, while without it, it only
+# collects between requests, so not here. It's evaluated, with IN_FIBER set before it, as
 # a stack overflow is only caught in a Fiber in WebAssembly, and its value is its lines.
 require 'json'
 require 'monitor'

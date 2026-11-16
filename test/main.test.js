@@ -276,6 +276,20 @@ test('starts Raindown again when a file in a .raindown folder changes, so its no
   assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, true, false]);
 });
 
+test("starts Raindown again once its memory's grown past 512 MB, when nothing's waiting for it", async () => {
+  const { vault } = fakeVault({ 'note.md': '# A' });
+  let memory = 300 * 2 ** 20;
+  const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : { output: '', warnings: [], written: [], memory }));
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
+  const rewrite = () => engine.rewrite({ path: 'note.md', markdown: '' }, { timeout: 1000 });
+
+  await rewrite();
+  memory = 600 * 2 ** 20;
+  await Promise.all([rewrite(), rewrite()]);
+  await engine.starting;
+  assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, false]);
+});
+
 test("stops Raindown when it doesn't answer in time, and starts it again for the next note", async () => {
   const { vault } = fakeVault({ 'note.md': '# A' });
   let answers = false;

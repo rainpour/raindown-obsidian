@@ -106,8 +106,8 @@ def ruby_module(jspi: false)
 end
 
 # The wasi-sdk and Binaryen the module without Asyncify's built with, for this computer, as their releases name it: a
-# wasi-sdk with LLVM 19 or later, whose setjmp keeps its state in the jmp_buf, rather than allocating, and a Binaryen
-# with --spill-pointers, which rbwasm's hasn't got.
+# wasi-sdk with LLVM 19 or later, whose setjmp keeps its state in the jmp_buf, rather than allocating, and Binaryen
+# 131, newer than rbwasm's 108, which it's built and timed with.
 WASI_SDK_VERSION = '34'
 BINARYEN_VERSION = '131'
 HOST_OS = RUBY_PLATFORM.include?('darwin') ? 'macos' : 'linux'

@@ -1,11 +1,16 @@
-Ruby without Asyncify collecting garbage only between requests, an experiment: the configure no longer runs
---spill-pointers, so garbage collection can't see what Ruby's C holds in WebAssembly's locals, and only collects in
-rb_wasm_jspi_gc, which the worker calls after each request, with no Ruby on the stack. Built with RB_WASM_IDLE_GC:
+Ruby without Asyncify collecting garbage only between requests, for the plugin's module for engines with JSPI, which
+scripts/ruby_wasm.rb builds with this with --jspi, beside ruby-4.0-jspi.patch, with RB_WASM_IDLE_GC. Its configure
+spills no locals to the stack in memory, which would cost 15 to 25% of Ruby's C, so garbage collection can't see what
+Ruby's C holds in WebAssembly's locals, and only collects in rb_wasm_jspi_gc, which the worker calls after each
+request, with no Ruby on the stack:
 
 1. gc_start refuses anywhere else, as GC.disable does, GC.start too, so the heap grows during a request, and notes
    that Ruby wanted to collect, in gc/default/default.c.
 2. rb_wasm_jspi_gc collects, a minor or major collection as Ruby wanted, marking and sweeping at once, but not while a
    Fiber's suspended, whose stack might hold an object only in a local, in gc.c and cont.c.
+
+WebAssembly's memory never shrinks, so it stays as big as the heaviest request made it, or a suspended Fiber let it
+grow, and the plugin starts Ruby again when it's too big.
 
 --- a/cont.c
 +++ b/cont.c

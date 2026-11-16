@@ -22,6 +22,10 @@ let vm;
 // WebAssembly.promising, which it waits for, rather than evalAsync.
 let jspi = false;
 let jspiEval;
+// The module without Asyncify's garbage collection, which only collects between requests, with no Ruby on the stack,
+// and Ruby's memory, whose size each answer gives, as it never shrinks.
+let collectGarbage;
+let rubyMemory;
 // The vault's name, which its cache is kept under, as every vault's at /vault.
 let vaultName = '';
 // The data each file had when it was last sent or written, to find those Raindown's written since.
@@ -53,6 +57,7 @@ async function answer(data) {
   } catch (error) {
     self.postMessage({ id: data.id, error: error.message });
   }
+  collectGarbage?.();
 }
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
@@ -89,7 +94,9 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
     exported.fiberStart = WebAssembly.promising(instance.exports.rb_wasm_jspi_fiber_start);
     jspiEval = WebAssembly.promising(instance.exports.rb_wasm_jspi_eval);
     instance.exports.rb_wasm_jspi_define();
+    collectGarbage = instance.exports.rb_wasm_jspi_gc;
   }
+  rubyMemory = instance.exports.memory;
   mark('rubyStarted');
   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
   folderAt(['vault', '.obsidian']);
@@ -138,7 +145,7 @@ async function rewrite({ type, path, markdown, bare, execute }) {
   const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
   const written = writtenFiles(folderAt(['vault']), '');
   return {
-    ...answer, written,
+    ...answer, written, memory: rubyMemory.buffer.byteLength,
     timings: { requested, ...rubySteps, ruby, filesCollected: performance.now() - began }
   };
 }

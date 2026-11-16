@@ -70,8 +70,9 @@ module HostRubyWithoutOpenSSL
 end
 RubyWasm::BaseRubyProduct.prepend(HostRubyWithoutOpenSSL)
 
-# Without Asyncify, with --jspi: setjmp from WebAssembly exception handling, and RB_WASM_EH, for the patch, and
-# wasm-opt's options without -g, as Binaryen's DWARF handling fails on Ruby's, after the patched configure's passes.
+# Without Asyncify, with --jspi: setjmp from WebAssembly exception handling, RB_WASM_EH and RB_WASM_IDLE_GC, for the
+# patches, which collect garbage only between requests, and wasm-opt's options without -g, as Binaryen's DWARF
+# handling fails on Ruby's, after the patched configure's passes.
 module WithoutAsyncify
   EH = '-mllvm -wasm-enable-sjlj -mexception-handling'
 
@@ -79,7 +80,7 @@ module WithoutAsyncify
     args = super.filter_map do |arg|
       case arg
       when /\ACFLAGS=/, /\ALDFLAGS=/ then "#{arg} #{EH}"
-      when /\Acppflags=/ then "#{arg} -DRB_WASM_EH"
+      when /\Acppflags=/ then "#{arg} -DRB_WASM_EH -DRB_WASM_IDLE_GC"
       when /\Awasmoptflags=/ then nil
       else arg
       end

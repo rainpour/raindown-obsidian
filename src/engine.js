@@ -10,6 +10,10 @@ const LARGEST_FILE = 4 * 1024 * 1024;
 const NODES_FOLDER = '.raindown';
 // How long Raindown has to start and give its first answer, as Ruby starts and loads Raindown first.
 const START_TIMEOUT = 60000;
+// Ruby's memory, past which it's started again, as WebAssembly's never shrinks: it's about 330 MB once Raindown's
+// written back a few notes, as Ruby keeps 280 MB for its shapes, and grows with a heavy note, as the module without
+// Asyncify only collects garbage between requests, or with each request while a Fiber's left suspended.
+const MEMORY_LIMIT = 512 * 1024 * 1024;
 // A link-local host, as a URL has it, like cloud metadata at 169.254.169.254, however it was written, which an
 // endpoint can't request, as with curl in Raindown.
 const LINK_LOCAL = /^(?:169\.254\.\d+\.\d+|\[(?:fe[89ab][0-9a-f]:[^\]]*|::ffff:a9fe:[0-9a-f]+)\])$/i;
@@ -48,6 +52,7 @@ class RaindownEngine {
     const ready = performance.now() - began;
     const answer = await this.ask(request, timeout);
     await Promise.all(answer.written.map(([file, bytes]) => this.writeFile(file, bytes)));
+    if (answer.memory > MEMORY_LIMIT) this.restartWhenIdle();
     const offset = (timings) => Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, round(ready + at)]));
     answer.timings = { ready: round(ready), ...offset(answer.timings ?? {}), answered: round(performance.now() - began) };
     console.debug(`Raindown ${request.type === 'render' ? 'rendered' : 'rewrote'} ${request.path}`, answer.timings);
@@ -79,6 +84,16 @@ class RaindownEngine {
     this.starting.catch(() => this.stop());
 
     return this.starting;
+  }
+
+  // Started again once nothing's waiting for it, as stopping fails what is, and memory never shrinks, so each answer
+  // until then asks again.
+  restartWhenIdle() {
+    if (this.pending.size) return;
+
+    console.debug('Raindown starting again, as its memory grew past', MEMORY_LIMIT / 2 ** 20, 'MB');
+    this.stop();
+    this.start().catch(() => {});
   }
 
   stop() {
