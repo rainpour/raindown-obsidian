@@ -4,3 +4,6 @@ data.json
 # bin/build's downloads, what it packs, and the module, and what it builds, which CI builds for a release.
 build/
 main.js
+
+# The benchmarks' year of orders, which wasm/experiments/without-asyncify/bench/bench.rb reads, from raindown-benchmarks.
+wasm/experiments/without-asyncify/bench/sales.csv

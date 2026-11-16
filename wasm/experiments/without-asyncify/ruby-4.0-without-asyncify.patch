@@ -1,0 +1,202 @@
+Ruby 4.0 in WebAssembly without Asyncify, an experiment: the plugin's patches are in wasm/patches, and this isn't one.
+
+Built with RB_WASM_EH, and with -mllvm -wasm-enable-sjlj -mexception-handling and -lsetjmp, as build.sh and
+ruby_wasm.rb build it:
+
+1. setjmp is wasi-libc's, from WebAssembly exception handling, in eval_intern.h, vm_core.h and gc.c, rather than
+   Asyncify's, and vm_exec takes Ruby's own path with it, in vm.c, with a jmp_buf of the usual size, in vm_core.h.
+2. Garbage collection scans only the stack in memory, in gc.c, as Binaryen's --spill-pointers, which the patched
+   configure runs after linking in place of --asyncify, keeps every pointer in a local there across calls.
+3. Asyncify's functions are wasm/missing.c's, which trap, but for stopping an unwind, in wasm/asyncify.h, so a Fiber
+   switch, the only thing left that needs one, aborts. The js gem's extension imports them, and links to these.
+4. LLVM 18's setjmp runtime, which wasi-sdk 24's libsetjmp, for LLVM 19's, doesn't have, is in wasm/missing.c, for
+   clang before 19.
+
+Apply wasm/patches/ruby-4.0-wasm-shapes.patch with it, but not the jumps patch, whose try/catch is Asyncify's.
+
+--- a/configure
++++ b/configure
+@@ -13163,7 +13163,7 @@
+      CPPFLAGS="$CPPFLAGS ${rb_opt}" ;;
+ esac
+ 	done
+-		POSTLINK="\$(WASMOPT) --asyncify \$(wasmoptflags) -o \$@ \$@${POSTLINK:+; $POSTLINK}"
++		POSTLINK="\$(WASMOPT) --spill-pointers \$(wasmoptflags) -o \$@ \$@${POSTLINK:+; $POSTLINK}"
+ 		# wasi-libc's sys/socket.h is not compatible with -std=gnu99,
+ 		# so re-declare shutdown in include/ruby/missing.h
+ 		ac_cv_func_shutdown=no
+--- a/eval_intern.h
++++ b/eval_intern.h
+@@ -33,7 +33,7 @@
+ #endif
+ 
+ #include <stdio.h>
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+ # include "wasm/setjmp.h"
+ #else
+ # include <setjmp.h>
+--- a/gc.c
++++ b/gc.c
+@@ -19,12 +19,15 @@
+ # include "ruby/ruby.h"
+ #endif
+ 
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+ # include "wasm/setjmp.h"
+ # include "wasm/machine.h"
+ #else
+ # include <setjmp.h>
+ #endif
++#ifdef RB_WASM_EH
++# include "wasm/machine.h"
++#endif
+ #include <stdarg.h>
+ #include <stdio.h>
+ 
+@@ -2935,8 +2938,10 @@
+     GET_STACK_BOUNDS(stack_start, stack_end, 1);
+     each_location_ptr(stack_start, stack_end, gc_mark_maybe_each_location, NULL);
+ 
++#ifndef RB_WASM_EH
+     rb_wasm_scan_locals(rb_mark_locations);
+     each_location_ptr(rb_stack_range_tmp[0], rb_stack_range_tmp[1], gc_mark_maybe_each_location, NULL);
++#endif
+ }
+ 
+ # endif
+--- a/vm.c
++++ b/vm.c
+@@ -2740,7 +2740,7 @@
+ vm_exec_loop(rb_execution_context_t *ec, enum ruby_tag_type state, struct rb_vm_tag *tag, VALUE result);
+ 
+ // for non-Emscripten Wasm build, use vm_exec with optimized setjmp for runtime performance
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+ 
+ struct rb_vm_exec_context {
+     rb_execution_context_t *const ec;
+@@ -2777,7 +2777,7 @@
+ 
+     _tag.retval = Qnil;
+ 
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+     struct rb_vm_exec_context ctx = {
+         .ec = ec,
+         .tag = &_tag,
+--- a/vm_core.h
++++ b/vm_core.h
+@@ -102,7 +102,7 @@
+ #define RUBY_ASSERT_CRITICAL_SECTION_LEAVE()
+ #endif
+ 
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+ # include "wasm/setjmp.h"
+ #else
+ # include <setjmp.h>
+@@ -954,7 +954,7 @@
+   `RB_VM_TAG_JMPBUF_GET` transforms a `rb_vm_tag_jmpbuf_t` into a
+   `rb_jmpbuf_t` to be passed to `rb_setjmp/rb_longjmp`.
+ */
+-#if defined(__wasm__) && !defined(__EMSCRIPTEN__)
++#if defined(__wasm__) && !defined(__EMSCRIPTEN__) && !defined(RB_WASM_EH)
+ /*
+   WebAssembly target with Asyncify-based SJLJ needs
+   to capture the execution context by unwind/rewind-ing
+--- a/wasm/asyncify.h
++++ b/wasm/asyncify.h
+@@ -1,6 +1,18 @@
+ #ifndef RB_WASM_SUPPORT_ASYNCIFY_H
+ #define RB_WASM_SUPPORT_ASYNCIFY_H
+ 
++#ifdef RB_WASM_EH
++/*
++  No Asyncify: these are wasm/missing.c's, which trap, but for stopping an unwind, so a Fiber switch, the only thing left
++  that needs one, aborts. The js gem's extension imports them too, and links to these.
++*/
++extern void *rb_asyncify_unwind_buf;
++void asyncify_start_unwind(void *buf);
++void asyncify_stop_unwind(void);
++void asyncify_start_rewind(void *buf);
++void asyncify_stop_rewind(void);
++#else
++
+ __attribute__((import_module("asyncify"), import_name("start_unwind")))
+ void asyncify_start_unwind(void *buf);
+ #define asyncify_start_unwind(buf) do {  \
+@@ -19,5 +31,7 @@
+ void asyncify_start_rewind(void *buf);
+ __attribute__((import_module("asyncify"), import_name("stop_rewind")))
+ void asyncify_stop_rewind(void);
++
++#endif
+ 
+ #endif
+--- a/wasm/missing.c
++++ b/wasm/missing.c
+@@ -190,3 +190,62 @@
+     errno = ENOTSUP;
+     return -1;
+ }
++
++#if defined(RB_WASM_EH) && __clang_major__ < 19
++/*
++  LLVM 18's setjmp on WebAssembly exceptions, as Emscripten's runtime gave it, which wasi-sdk 24's libsetjmp, for
++  LLVM 19's, doesn't: each setjmp in a function is given an ID, kept in its jmp_buf, and a label, in a table the
++  function keeps, which a longjmp's catch looks its ID up in, to jump to the label.
++*/
++#include <stdint.h>
++#include <stdlib.h>
++
++struct rb_wasm_setjmp_entry { uint32_t id, label; };
++
++static uint32_t rb_wasm_setjmp_id;
++static uint32_t rb_wasm_temp_ret0;
++
++struct rb_wasm_setjmp_entry *
++saveSetjmp(uint32_t *env, uint32_t label, struct rb_wasm_setjmp_entry *table, uint32_t size)
++{
++    *env = ++rb_wasm_setjmp_id;
++    for (uint32_t i = 0; i < size; i++) {
++        if (table[i].id == 0) {
++            table[i] = (struct rb_wasm_setjmp_entry){ rb_wasm_setjmp_id, label };
++            table[i + 1].id = 0;
++            rb_wasm_temp_ret0 = size;
++            return table;
++        }
++    }
++    size *= 2;
++    table = realloc(table, sizeof(*table) * (size + 1));
++    table[size / 2] = (struct rb_wasm_setjmp_entry){ rb_wasm_setjmp_id, label };
++    table[size / 2 + 1].id = 0;
++    rb_wasm_temp_ret0 = size;
++    return table;
++}
++
++uint32_t
++testSetjmp(uint32_t id, struct rb_wasm_setjmp_entry *table, uint32_t size)
++{
++    for (uint32_t i = 0; i < size && table[i].id; i++) {
++        if (table[i].id == id) return table[i].label;
++    }
++    return 0;
++}
++
++uint32_t
++getTempRet0(void)
++{
++    return rb_wasm_temp_ret0;
++}
++#endif
++
++#ifdef RB_WASM_EH
++#include "wasm/asyncify.h"
++
++void asyncify_start_unwind(void *buf) { (void)buf; __builtin_trap(); }
++void asyncify_stop_unwind(void) { rb_asyncify_unwind_buf = 0; }
++void asyncify_start_rewind(void *buf) { (void)buf; __builtin_trap(); }
++void asyncify_stop_rewind(void) { __builtin_trap(); }
++#endif

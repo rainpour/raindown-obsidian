@@ -1,0 +1,103 @@
+The plugin built with Ruby without Asyncify, from ruby_wasm.rb, an experiment, applied to raindown-obsidian with
+git apply, then built with NO_VFS=1 and RUBY_WASM, as the README says:
+
+1. The worker answers with vm.eval, in src/worker.js, as Fibers trap without Asyncify, so evalAsync can't be used.
+2. With NO_VFS, bin/build doesn't pack the module with wasi-vfs, which can't compile exception handling, but gives its
+   files to the worker in main.js, with the js gem's and a /bundle/setup.rb that finds them, as rbwasm packs them, and
+   the worker gives them to Ruby in its folders, in src/engine.js and src/worker.js.
+
+diff --git a/bin/build b/bin/build
+index 0ba4e7e..ec29ffc 100755
+--- a/bin/build
++++ b/bin/build
+@@ -175,8 +175,22 @@ end
+ 
+ # 4. Packed.
+ wasm = File.join(BUILD, 'raindown.wasm')
+-run(WASM_GEMS, *BUNDLED, 'rbwasm', 'pack', ruby_module, '-o', wasm,
+-    *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] })
++# Without Asyncify, wasi-vfs can't pack the module, as it can't compile exception handling, so with NO_VFS the files are
++# main.js's, which the worker gives Ruby in its folders, with the js gem's, which rbwasm packs, and a /bundle/setup.rb
++# that finds them.
++root_files = nil
++if ENV['NO_VFS']
++  copy(File.join(Gem::Specification.find_by_name('js').full_gem_path, 'lib'), File.join(STAGE, 'bundle', 'js', 'lib'))
++  File.write(File.join(STAGE, 'bundle', 'setup.rb'), "$LOAD_PATH.unshift('/bundle/js/lib')\n")
++  folders << 'bundle'
++  FileUtils.cp(ruby_module, wasm)
++  root_files = folders.flat_map { |folder| Dir.glob("#{folder}/**/*", base: STAGE) }
++                      .select { File.file?(File.join(STAGE, it)) }
++                      .map { [it, [File.binread(File.join(STAGE, it))].pack('m0')] }
++else
++  run(WASM_GEMS, *BUNDLED, 'rbwasm', 'pack', ruby_module, '-o', wasm,
++      *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] })
++end
+ 
+ # main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
+ # WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
+@@ -191,7 +205,8 @@ runtime = {
+   wasm: z85(compressed),
+   wasmSize: compressed.bytesize,
+   worker:,
+-  loadPaths: load_paths
++  loadPaths: load_paths,
++  rootFiles: root_files
+ }
+ sources = {
+   './runtime' => "module.exports = #{JSON.generate(runtime)};",
+diff --git a/src/engine.js b/src/engine.js
+index 50cfbe0..662749d 100644
+--- a/src/engine.js
++++ b/src/engine.js
+@@ -58,7 +58,7 @@ class RaindownEngine {
+   start() {
+     this.starting ??= (async () => {
+       const began = performance.now();
+-      const { wasm, wasmSize, worker, loadPaths } = this.runtime();
++      const { wasm, wasmSize, worker, loadPaths, rootFiles } = this.runtime();
+       const [files, nodes] = [[], new Map()];
+       await this.readFolder('', files, nodes);
+       this.nodes = nodes;
+@@ -68,7 +68,7 @@ class RaindownEngine {
+       const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
+       const vault = this.app.vault.getName?.() ?? '';
+       const vaultRead = Math.round(performance.now() - began);
+-      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
++      const { timings } = await this.ask({ type: 'start', wasm, wasmSize, loadPaths, rootFiles, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
+       // How long starting took, in milliseconds: reading the vault, each of the worker's steps, from when it began, and
+       // in all.
+       this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };
+diff --git a/src/worker.js b/src/worker.js
+index 613c657..f502647 100644
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -51,7 +51,7 @@ async function answer(data) {
+ 
+ // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
+ // each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
+-async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
++async function start({ wasm, wasmSize, loadPaths, rootFiles, files, frontMatters = {}, vault = '' }) {
+   const began = performance.now();
+   const timings = {};
+   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
+@@ -63,6 +63,11 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
+   const module = await compiled(decompressing);
+   mark('compiled');
+   root = new PreopenDirectory('/', new Map());
++  // Ruby's files, when the module's not packed with them, without Asyncify.
++  for (const [file, base64] of rootFiles || []) {
++    const parts = file.split('/');
++    folderAt(parts.slice(0, -1)).contents.set(parts.at(-1), new File(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))));
++  }
+   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
+   ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));
+   mark('rubyStarted');
+@@ -106,7 +111,7 @@ async function rewrite({ type, path, markdown, bare, execute }) {
+   changes.clear();
+   root.dir.contents.set(REQUEST, new File(new TextEncoder().encode(JSON.stringify(request))));
+   const requested = performance.now() - began;
+-  const json = (await vm.evalAsync(`RaindownEngine.answer('/${REQUEST}')`)).toString();
++  const json = vm.eval(`RaindownEngine.answer('/${REQUEST}')`).toString();
+   const ruby = performance.now() - began;
+   const { timings = {}, ...answer } = JSON.parse(json);
+   const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
