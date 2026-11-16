@@ -98,13 +98,23 @@ function compiled(stream) {
 }
 
 // The note as Raindown writes it back, with its warnings, running its endpoints with execute, or rendered as Markdown,
-// for reading view, and the files it wrote, by their paths in the vault.
+// for reading view, and the files it wrote, by their paths in the vault. Its timings are each step's end, Ruby's among
+// them, in milliseconds from when the worker began it.
 async function rewrite({ type, path, markdown, bare, execute }) {
+  const began = performance.now();
   const request = { path: `/vault/${path}`, markdown, bare, execute, render: type === 'render', changed: [...changes] };
   changes.clear();
   root.dir.contents.set(REQUEST, new File(new TextEncoder().encode(JSON.stringify(request))));
-  const answer = JSON.parse((await vm.evalAsync(`RaindownEngine.answer('/${REQUEST}')`)).toString());
-  return { ...answer, written: writtenFiles(folderAt(['vault']), '') };
+  const requested = performance.now() - began;
+  const json = (await vm.evalAsync(`RaindownEngine.answer('/${REQUEST}')`)).toString();
+  const ruby = performance.now() - began;
+  const { timings = {}, ...answer } = JSON.parse(json);
+  const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
+  const written = writtenFiles(folderAt(['vault']), '');
+  return {
+    ...answer, written,
+    timings: { requested, ...rubySteps, ruby, filesCollected: performance.now() - began }
+  };
 }
 
 // Z85's bytes, cut to their size, as bin/build pads them to a multiple of 4.

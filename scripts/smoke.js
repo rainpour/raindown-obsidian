@@ -76,14 +76,15 @@ async function requestUrl({ url, method, headers, body }) {
   return { status: response.status, text: await response.text(), headers: Object.fromEntries(response.headers) };
 }
 
-// Whether each note's answer, written back or rendered, is native Raindown's, or else why not.
-async function checkNotes(engine, folder, answers, type) {
+// Whether each note's answer, written back or rendered, is native Raindown's, or else why not, with its timings in timed.
+async function checkNotes(engine, folder, answers, type, timed) {
   const failures = [];
   for (const [note, expected] of Object.entries(answers)) {
     const markdown = fs.readFileSync(path.join(folder, note), 'utf8');
     const answer = await engine[type]({ path: note, markdown, bare: false }, { timeout: 60000 }).catch((error) => ({ error }));
     if (answer.error) failures.push(`${note}: ${answer.error.message}`);
     else if (answer.output !== expected) failures.push(`${note}'s ${type} was:\n${answer.output}\nnot native Raindown's:\n${expected}`);
+    else timed.push({ note, type, timings: answer.timings });
   }
   return failures;
 }
@@ -103,15 +104,26 @@ async function checkEndpoint(engine) {
   }
 }
 
-// The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives.
-function steps({ vaultRead, started, ...timings }) {
+// The slowest answers, with how long each of their steps took.
+function slowest(timed, count = 5) {
+  return timed.sort((a, b) => b.timings.answered - a.timings.answered).slice(0, count)
+    .map(({ note, type, timings }) => `  ${type} ${note} in ${timings.answered} ms: ${durations(timings)}`).join('\n');
+}
+
+// Each step's duration, from the milliseconds at which each ended.
+function durations(timings) {
   let before = 0;
-  const each = Object.entries(timings).map(([step, at]) => {
-    const took = at - before;
+  return Object.entries(timings).map(([step, at]) => {
+    const took = Math.round((at - before) * 10) / 10;
     before = at;
     return `${step} ${took}`;
-  });
-  return [`vaultRead ${vaultRead}`, ...each, `worker script and messages ${started - vaultRead - before}`].join(', ');
+  }).join(', ');
+}
+
+// The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives.
+function steps({ vaultRead, started, ...timings }) {
+  const last = Object.values(timings).at(-1) ?? 0;
+  return [`vaultRead ${vaultRead}`, durations(timings), `worker script and messages ${started - vaultRead - last}`].join(', ');
 }
 
 async function smoke() {
@@ -123,6 +135,7 @@ async function smoke() {
   const engine = new RaindownEngine(vaultApp(folder), { runtime: () => load('./runtime'), Worker: InProcessWorker, requestUrl });
   const started = performance.now();
   let failures;
+  const timed = [];
   try {
     const firstNote = Object.keys(answers)[0];
     const first = performance.now();
@@ -130,7 +143,7 @@ async function smoke() {
     const firstWrite = Math.round(performance.now() - first);
     console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
     failures = [
-      ...await checkNotes(engine, folder, answers, 'rewrite'), ...await checkNotes(engine, folder, renders, 'render'),
+      ...await checkNotes(engine, folder, answers, 'rewrite', timed), ...await checkNotes(engine, folder, renders, 'render', timed),
       ...await checkEndpoint(engine)
     ];
   } finally {
@@ -141,6 +154,7 @@ async function smoke() {
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`Smoke test: ${Object.keys(answers).length} notes written back and rendered as native Raindown did them, and an endpoint run, in ${seconds} s`);
+  console.log(`Slowest:\n${slowest(timed)}`);
 }
 
 smoke().catch((error) => {

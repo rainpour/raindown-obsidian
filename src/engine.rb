@@ -3,15 +3,6 @@
 require 'json'
 require 'raindown/editing'
 
-class Object
-  def each(&block)
-    return enum_for(:each) unless block_given?
-
-    # Pass the Ruby block directly to JS; the js gem wraps it as a callable function
-    JS.global.jsEach(self, block)
-  end
-end
-
 # What the plugin's worker asks of Raindown, running in Ruby compiled to WebAssembly: a note written back, as
 # "raindown server" answers it, or rendered as Markdown, for reading view. The request is a file, /request.json, so the note's never quoted into Ruby code, and the
 # vault is at /vault, as the worker mirrors it.
@@ -29,11 +20,18 @@ module RaindownEngine
   end
 
   # The note as Raindown writes it back, with its warnings, or the error that stopped it, as JSON, after the files the
-  # vault's changed since the last one.
+  # vault's changed since the last one. Its timings are each step's end, in milliseconds from when it began.
   def answer(file)
+    began = Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond)
+    timings = {}
+    mark = ->(step) { timings[step] = (Process.clock_gettime(Process::CLOCK_MONOTONIC, :float_millisecond) - began) }
     request = JSON.parse(File.read(file))
+    mark.call(:parsed)
     Raindown::Pages.changed(request.fetch('changed', []))
-    JSON.generate(answered(request, request.fetch('markdown'), path: request.fetch('path'), bare: request['bare'] == true))
+    mark.call(:changed)
+    answer = answered(request, request.fetch('markdown'), path: request.fetch('path'), bare: request['bare'] == true)
+    mark.call(request['render'] ? :rendered : :rewritten)
+    JSON.generate(answer.merge(timings:))
   rescue StandardError, ScriptError => e
     JSON.generate(error: e.message)
   end

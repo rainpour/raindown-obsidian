@@ -14,13 +14,6 @@ const START_TIMEOUT = 60000;
 // endpoint can't request, as with curl in Raindown.
 const LINK_LOCAL = /^(?:169\.254\.\d+\.\d+|\[(?:fe[89ab][0-9a-f]:[^\]]*|::ffff:a9fe:[0-9a-f]+)\])$/i;
 
-globalThis.jsEach = function(jsArray, rubyCallback) {
-  for (let i = 0; i < jsArray.length; i++) {
-    // Invokes the Ruby block with the current item
-    rubyCallback(jsArray[i]);
-  }
-};
-
 class RaindownEngine {
   // runtime gives what bin/build embeds in main.js: the module, the worker's code and the load path. requestUrl sends
   // endpoints' requests, as Obsidian's does.
@@ -46,11 +39,18 @@ class RaindownEngine {
     return this.answer({ type: 'render', ...note }, timeout);
   }
 
+  // Its timings are each step's end, in milliseconds from when it was asked: starting, the worker's and Ruby's steps,
+  // and in all, with the files it wrote written. Obsidian's console shows them as "Raindown rewrote" or "rendered".
   async answer(request, timeout) {
+    const began = performance.now();
     if (await this.nodesChanged()) this.stop();
     await this.start();
+    const ready = performance.now() - began;
     const answer = await this.ask(request, timeout);
     await Promise.all(answer.written.map(([file, bytes]) => this.writeFile(file, bytes)));
+    const offset = (timings) => Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, round(ready + at)]));
+    answer.timings = { ready: round(ready), ...offset(answer.timings ?? {}), answered: round(performance.now() - began) };
+    console.debug(`Raindown ${request.type === 'render' ? 'rendered' : 'rewrote'} ${request.path}`, answer.timings);
     return answer;
   }
 
@@ -209,6 +209,11 @@ class RaindownEngine {
     if (path.split('/').some((part) => part.startsWith('.'))) return vault.adapter.writeBinary(path, buffer);
     return vault.createBinary(path, buffer);
   }
+}
+
+// Milliseconds, to a tenth, as a render takes a few.
+function round(milliseconds) {
+  return Math.round(milliseconds * 10) / 10;
 }
 
 function mirrored(path) {
