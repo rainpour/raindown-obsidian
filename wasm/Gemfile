@@ -4,6 +4,5 @@
 # JavaScript, as ruby.wasm's npm package's is built. Their versions are bin/build's RUBY_WASM_VERSION.
 source 'https://rubygems.org'
 
-gem 'oj'
 gem 'js', '2.10.1'
 gem 'ruby_wasm', '2.10.1'
