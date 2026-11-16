@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Raindown runs on Ruby 4.0, in place of 3.4
 - Raindown loads in two thirds of the time, and writes back a note of components up to twice as fast, as its Ruby's patched to catch exceptions, `break` and `ensure` without unwinding its whole stack in WebAssembly
 - A vault's Ruby nodes run faster: iterating a hash, `Mutex#synchronize`, `catch`, `require`, comparing arrays and reading the vault's files are 3 to 13 times faster
+- Ruby starts about 150 ms sooner, as its shape tree's 280 MB is no longer allocated and zeroed as it starts
 
 ### Removed
 

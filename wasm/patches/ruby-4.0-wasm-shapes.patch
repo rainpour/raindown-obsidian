@@ -1,0 +1,36 @@
+Ruby 4.0's shape tree's memory in WebAssembly, for the plugin's ruby.wasm, which scripts/ruby_wasm.rb builds with this.
+
+Ruby reserves its shape tree's buffers, 280 MB, with mmap as it starts. Natively that's free, as the OS only backs the
+pages it touches, but wasi's emulated mmap allocates and zeroes all of it, taking 150 to 200 ms each time Ruby starts.
+So in shape.c they're fresh WebAssembly memory, from memory.grow, which is already zeroed and only backed by the OS as
+it's touched, as mmap's is natively. They're never unmapped, so the memory's never given back.
+
+It's inside #if defined(__wasi__) && defined(HAVE_MMAP), beside Ruby's own code, which is left as it is.
+
+To change it, edit Ruby's source in build/ruby_wasm/build/checkouts/4.0, then diff it against its tarball's.
+
+--- a/shape.c
++++ b/shape.c
+@@ -21,6 +21,22 @@
+ #endif
+ 
+ #define REDBLACK_CACHE_SIZE (SHAPE_BUFFER_SIZE * 32)
++
++#if defined(__wasi__) && defined(HAVE_MMAP)
++/*
++  The shape tree's buffers, 280 MB, from fresh WebAssembly memory, which is zeroed, and only backed by the OS as it's
++  touched, as mmap's is natively, rather than from wasi's emulated mmap, which allocates and zeroes it all at each start.
++  They're never unmapped.
++*/
++static void *
++shape_buffer_alloc(size_t size)
++{
++    size_t at = __builtin_wasm_memory_grow(0, (size + 65535) / 65536);
++    if (at == (size_t)-1) return MAP_FAILED;
++    return (void *)(at * 65536);
++}
++# define mmap(addr, size, prot, flags, fd, offset) shape_buffer_alloc(size)
++#endif
+ 
+ /* This depends on that the allocated memory by Ruby's allocator or
+  * mmap is not located at an odd address. */
