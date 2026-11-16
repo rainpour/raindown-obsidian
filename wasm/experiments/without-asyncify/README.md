@@ -24,6 +24,8 @@ In the plugin, with its extensions and the js gem, the smoke test starts Raindow
 
 A `longjmp` is a WebAssembly exception, which takes V8 about 0.4 µs, and as much again for each frame between that calls setjmp, which catches it and throws it again, as [bench/sjlj.c](bench/sjlj.c) times. A `throw` jumps twice, to its block's `vm_exec` and then to its `catch`, so it takes about 2 µs, where the jumps patch, unwinding a few frames with Asyncify, takes less. Only jumping fewer times would make it faster.
 
+Switching Fibers and calling blocks from C cost little, as [bench/switches.rb](bench/switches.rb) times. A switch suspends JSPI's stack and resumes another in a microtask, yet a resume and its yield take 1.3 µs, where Asyncify's take 4.4, so `Enumerator#next` is 2.5 to 3.5 times as fast. A block called from C, like `(0...1000).each`'s, runs `vm_exec`'s setjmp and V8's `try` each time, and takes 26 ns longer than a block Ruby yields to, like `1000.times`'s, where it takes 16 ns longer with Asyncify and 4 natively. In a profile of the first, `rb_vm_exec` itself takes 7.5% of the time, about the most that taking out its setjmp could save, and `invoke_block_from_c_bh` 15%.
+
 ## What it took
 
 - A wasi-sdk with LLVM 19 or later, like wasi-sdk 34, whose setjmp keeps its state in the `jmp_buf`. LLVM 18's, in rbwasm's wasi-sdk 24, allocates a table for each call of a function that calls setjmp, so each block called from C, which runs `vm_exec`, mallocs and frees one, and iterating is a third slower.
@@ -45,7 +47,10 @@ node wasm/experiments/without-asyncify/run.js build/asyncify/ruby wasm/experimen
 node wasm/experiments/without-asyncify/run-jspi.js build/jspi/ruby wasm/experiments/without-asyncify/bench fibers.rb
 ruby --disable-gems wasm/experiments/without-asyncify/bench/fibers.rb
 
-# Where the time goes, in a module whose functions have names, from wasm-opt with -g
+# Where the time goes, in a module whose functions have names: linked again without post-linking, then post-linked
+# with -g each time, as one wasm-opt without it drops the stack pointer's name, which --spill-pointers needs
+rm OUT/ruby && make -C OUT ruby POSTLINK=: && wasm-opt -g --strip-dwarf OUT/ruby -o ruby.wasm
+wasm-opt -g --flatten --coalesce-locals --spill-pointers -O3 --enable-exception-handling ruby.wasm -o ruby.wasm
 node --cpu-prof --cpu-prof-dir=prof wasm/experiments/without-asyncify/run.js ruby.wasm bench hash.rb
 node wasm/experiments/without-asyncify/profile.js prof/*.cpuprofile
 ```
