@@ -17,11 +17,19 @@ const FRONT_MATTERS = 'front_matters.json';
 
 let root;
 let vm;
+// The vault's files and the front matter Obsidian's read, which the engine reads while Ruby starts, and sends once it
+// has, which Ruby's given once Raindown's loaded.
+let vaultSent;
+const vaultArrived = new Promise((resolve) => { vaultSent = resolve; });
 // Whether Ruby's the module without Asyncify, which waits for JavaScript, and switches Fibers, with JSPI, JavaScript
 // Promise Integration, where the engine has it, and rb_wasm_jspi_eval, which runs Ruby that can, through
 // WebAssembly.promising, which it waits for, rather than evalAsync.
 let jspi = false;
 let jspiEval;
+// RbWasmJSPI, called rather than evaluated, and the code its entry runs, set again only when it changes, as evaluating
+// Ruby's source parses and compiles it each time.
+let jspiModule;
+let entryCode;
 // The module without Asyncify's garbage collection, which only collects between requests, with no Ruby on the stack,
 // and Ruby's memory, whose size each answer gives, as it never shrinks.
 let collectGarbage;
@@ -33,6 +41,12 @@ const synced = new WeakMap();
 // The files changed in the vault since the last write-back, by their paths in Ruby, including those Raindown wrote, so
 // it reads them again, as it doesn't check modified times, which the WASI shim doesn't keep.
 const changes = new Set();
+// The paths in Ruby's folders it opened to write, or linked, like a file renamed, since the last answer, so only those
+// are checked for what Raindown wrote, rather than every file in the vault.
+const touched = new Set();
+// WASI's flags for creating and truncating a file, and the right to write to it.
+const OFLAGS_WRITING = 1 | 8;
+const RIGHTS_FD_WRITE = 64n;
 
 // Endpoints' requests sent to Obsidian, by their ids, waiting for their responses.
 const fetches = new Map();
@@ -45,6 +59,7 @@ let queue = Promise.resolve();
 
 self.onmessage = ({ data }) => {
   if (data.type === 'fetched') return fetched(data);
+  if (data.type === 'vault') return vaultSent(data);
 
   queue = queue.then(() => answer(data));
 };
@@ -61,13 +76,16 @@ async function answer(data) {
 }
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
-// each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, files, frontMatters = {}, vault = '' }) {
+// each gem's, as packed. It's the one without Asyncify when the engine sends it, as it has JSPI. Says it's begun, so
+// the engine reads the vault meanwhile, rather than before. Answers with how long each step took, in milliseconds from
+// the start, as timings.
+async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, vault = '' }) {
+  self.postMessage({ type: 'began' });
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
   vaultName = vault;
-  jspi = Boolean(wasmJspi) && typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  jspi = Boolean(wasmJspi);
   const bytes = jspi ? fromZ85(wasmJspi, wasmJspiSize) : fromZ85(wasm, wasmSize);
   mark('decoded');
   const decompressing = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
@@ -75,15 +93,27 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
   const module = await compiled(decompressing);
   mark('compiled');
   root = new PreopenDirectory('/', new Map());
+  const [open, link] = [root.path_open.bind(root), root.path_link.bind(root)];
+  root.path_open = (dirflags, path, oflags, rights, ...rest) => {
+    if (oflags & OFLAGS_WRITING || BigInt(rights) & RIGHTS_FD_WRITE) touched.add(path);
+    return open(dirflags, path, oflags, rights, ...rest);
+  };
+  root.path_link = (path, ...rest) => { touched.add(path); return link(path, ...rest); };
   // Ruby's files, which main.js has, rather than its module, with the js gem's and a /bundle/setup.rb that finds them,
   // one after another, compressed with gzip, in Z85, as the module is, by their paths and sizes.
   const data = new Uint8Array(await new Response(new Blob([fromZ85(rootData, rootDataSize)]).stream()
     .pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  const bytecode = [];
   let at = 0;
   for (const [file, size] of rootFiles) {
     const parts = file.split('/');
+    if (parts[0] === 'bytecode') bytecode.push(`${file.slice('bytecode'.length, -'.yarb'.length)} ${at} ${size}`);
     folderAt(parts.slice(0, -1)).contents.set(parts.at(-1), new File(data.subarray(at, at += size)));
   }
+  // Ruby's files as one, with where each file's bytecode is in it, which src/bytecode.rb reads once, rather than
+  // opening each.
+  root.dir.contents.set('bytecode.bin', new File(data));
+  root.dir.contents.set('bytecode.idx', new File(new TextEncoder().encode(bytecode.join('\n'))));
   mark('filesUnpacked');
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
   const exported = {};
@@ -100,9 +130,6 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
   mark('rubyStarted');
   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
   folderAt(['vault', '.obsidian']);
-  syncFiles({ changed: files });
-  changes.clear();
-  mark('filesCopied');
   // Garbage collection's paused while Raindown loads, which collects twice otherwise, taking about 50 ms in all.
   vm.eval([
     "require 'rbconfig'",
@@ -114,7 +141,12 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
     jspi ? JSPI_RUBY : '',
     'GC.enable'
   ].join('\n'));
+  if (jspi) jspiModule = vm.eval('RbWasmJSPI');
   mark('raindownLoaded');
+  const { files, frontMatters = {} } = await vaultArrived;
+  syncFiles({ changed: files });
+  changes.clear();
+  mark('filesCopied');
   const watched = Object.fromEntries(Object.entries(frontMatters).map(([path, frontMatter]) => [`/vault/${path}`, frontMatter]));
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
@@ -143,7 +175,7 @@ async function rewrite({ type, path, markdown, bare, execute }) {
   const ruby = performance.now() - began;
   const { timings = {}, ...answer } = JSON.parse(json);
   const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
-  const written = writtenFiles(folderAt(['vault']), '');
+  const written = writtenFiles();
   return {
     ...answer, written, memory: rubyMemory.buffer.byteLength,
     timings: { requested, ...rubySteps, ruby, filesCollected: performance.now() - began }
@@ -235,9 +267,10 @@ end
 async function evalWaiting(code) {
   if (!jspi) return vm.evalAsync(code);
 
-  vm.eval(`RbWasmJSPI.entry = -> { ${code} }`);
+  if (code !== entryCode) vm.eval(`RbWasmJSPI.entry = -> { ${code} }`);
+  entryCode = code;
   await jspiEval();
-  return vm.eval('RbWasmJSPI.take');
+  return jspiModule.call('take');
 }
 
 // Z85's bytes, cut to their size, as bin/build pads them to a multiple of 4.
@@ -292,12 +325,13 @@ const componentRequests = {
     }
     return { nodes: Object.entries(components.classes).map(([name, node]) => ({ name, render: typeof node.prototype.render === 'function' })) };
   },
-  // Each call makes its component the first time, and answers apart, so one that throws doesn't fail the others.
-  async call({ calls }) {
+  // Each call makes its component the first time, and answers apart, so one that throws doesn't fail the others. The
+  // metadata the calls share, every file's front matter, comes once, and goes in each one's context.
+  async call({ calls, metadata }) {
     const answers = calls.map(async ({ id, name, args, props, method, context, root: projectRoot }) => {
       try {
         components.made[id] ??= new components.classes[name](props, ...args);
-        return { value: await components.made[id][method]({ ...context, raindown: raindownServices(projectRoot, serviceAnswer) }) };
+        return { value: await components.made[id][method]({ ...context, metadata, raindown: raindownServices(projectRoot, serviceAnswer) }) };
       } catch (error) {
         return { error: String(error?.message ?? error) };
       }
@@ -338,6 +372,7 @@ const services = {
       folder.contents.set(name, file);
     }
     file.data = new TextEncoder().encode(text);
+    touched.add(parts.concat(name).join('/'));
     return null;
   },
   async cache_get(projectRoot, key) {
@@ -468,17 +503,18 @@ function syncFiles({ changed = [], removed = [] }) {
   }
 }
 
-// The files in the folder, and in its folders, that Raindown wrote since they were last sent or written, like a CSV
-// table: made or changed, as [path, bytes].
-function writtenFiles(folder, path) {
-  return [...folder.contents].flatMap(([name, entry]) => {
-    const inside = path ? `${path}/${name}` : name;
-    if (entry instanceof Directory) return writtenFiles(entry, inside);
-    if (synced.get(entry) === entry.data) return [];
+// The files Raindown opened to write, or linked, that it wrote since they were last sent or written, like a CSV table:
+// made or changed, as [path in the vault, bytes].
+function writtenFiles() {
+  const paths = [...touched].map((path) => path.split('/').filter(Boolean).join('/')).filter((path) => path.startsWith('vault/'));
+  touched.clear();
+  return [...new Set(paths)].flatMap((path) => {
+    const entry = entryAt(path);
+    if (!(entry instanceof File) || synced.get(entry) === entry.data) return [];
 
     synced.set(entry, entry.data);
-    changes.add(`/vault/${inside}`);
-    return [[inside, entry.data.slice()]];
+    changes.add(`/${path}`);
+    return [[path.slice('vault/'.length), entry.data.slice()]];
   });
 }
 

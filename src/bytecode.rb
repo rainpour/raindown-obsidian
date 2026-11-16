@@ -6,14 +6,30 @@
 # file's source is empty, as only its bytecode's packed, so when its bytecode won't load, that's raised, rather than
 # loading nothing.
 class RubyVM::InstructionSequence # rubocop:disable Style/ClassAndModuleChildren -- reopens Ruby's own class
-  def self.load_iseq(path)
-    bytecode = "/bytecode#{path}.yarb"
-    return unless File.exist?(bytecode)
+  # Every file's bytecode, where the worker gives Ruby's files as one, /bytecode.bin, with where each is in it, in
+  # /bytecode.idx, read once, rather than opening each file, or else nil, to read each from its file.
+  INDEX = File.exist?('/bytecode.idx') && File.read('/bytecode.idx').lines(chomp: true).to_h do |line|
+    path, at, size = line.split
+    [path, [at.to_i, size.to_i]]
+  end
+  BYTECODE = INDEX && File.binread('/bytecode.bin')
 
-    load_from_binary(File.binread(bytecode))
+  def self.load_iseq(path)
+    bytecode = bytecode_of(path)
+    return unless bytecode
+
+    load_from_binary(bytecode)
   rescue RuntimeError => e
     raise LoadError, "#{path}'s bytecode didn't load: #{e.message}" if File.zero?(path)
 
     nil
   end
+
+  def self.bytecode_of(path)
+    return INDEX[path] && BYTECODE.byteslice(*INDEX[path]) if INDEX
+
+    file = "/bytecode#{path}.yarb"
+    File.binread(file) if File.exist?(file)
+  end
+  private_class_method :bytecode_of
 end

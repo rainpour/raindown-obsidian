@@ -65,23 +65,28 @@ class RaindownEngine {
     return answer;
   }
 
-  // Started once, and again after it's stopped, like when a .raindown folder changed, so its nodes load again.
+  // Started once, and again after it's stopped, like when a .raindown folder changed, so its nodes load again. The
+  // worker starts Ruby while the vault's read, which it's sent once it says it's begun, as it wouldn't get going while
+  // this thread reads.
   start() {
     this.starting ??= (async () => {
       const began = performance.now();
       const { wasm, wasmSize, wasmJspi, wasmJspiSize, worker, loadPaths, rootFiles, rootData, rootDataSize } = this.runtime();
-      const [files, nodes] = [[], new Map()];
-      await this.readFolder('', files, nodes);
-      this.nodes = nodes;
       this.worker = new this.Worker(URL.createObjectURL(new Blob([worker], { type: 'text/javascript' })));
       this.worker.onmessage = ({ data }) => this.receive(data);
       this.worker.onerror = (event) => this.fail(new Error(`Raindown stopped: ${event.message}`));
-      const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vault = this.app.vault.getName?.() ?? '';
+      const started = this.ask({ type: 'start', ...moduleRun({ wasm, wasmSize, wasmJspi, wasmJspiSize }), loadPaths, rootFiles, rootData, rootDataSize, vault }, START_TIMEOUT);
+      await Promise.race([new Promise((resolve) => { this.workerBegan = resolve; }), started]);
+      const [files, nodes] = [[], new Map()];
+      await this.readFolder('', files, nodes);
+      this.nodes = nodes;
+      const frontMatters = Object.fromEntries(files.flatMap(([path]) => this.frontMatter(path)));
       const vaultRead = Math.round(performance.now() - began);
-      const { timings, jspi } = await this.ask({ type: 'start', wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, files, frontMatters, vault }, START_TIMEOUT, files.map(([, bytes]) => bytes));
-      // How long starting took, in milliseconds: reading the vault, each of the worker's steps, from when it began, and
-      // in all.
+      this.worker.postMessage({ type: 'vault', files, frontMatters }, files.map(([, bytes]) => bytes));
+      const { timings, jspi } = await started;
+      // How long starting took, in milliseconds: reading the vault, which the worker's steps overlap, each of those,
+      // from when the worker began, and in all.
       this.timings = { vaultRead, ...timings, started: Math.round(performance.now() - began) };
       // Whether Ruby's the module without Asyncify, which waits with JSPI, or Asyncify's, where the engine hasn't got it.
       this.jspi = jspi;
@@ -152,6 +157,7 @@ class RaindownEngine {
 
   receive({ id, type, error, ...answer }) {
     if (type === 'fetch') return this.fetch(id, answer.request);
+    if (type === 'began') return this.workerBegan?.();
 
     const request = this.pending.get(id);
     if (!request) return;
@@ -245,6 +251,15 @@ class RaindownEngine {
 // Milliseconds, to a tenth, as a render takes a few.
 function round(milliseconds) {
   return Math.round(milliseconds * 10) / 10;
+}
+
+// The module the worker runs: without Asyncify where the engine has JSPI, as the worker's is the same engine, or else
+// Asyncify's, so it's sent only that one.
+function moduleRun({ wasm, wasmSize, wasmJspi, wasmJspiSize }) {
+  const jspi = wasmJspi && typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  if (jspi) return { wasmJspi, wasmJspiSize };
+
+  return { wasm, wasmSize };
 }
 
 function mirrored(path) {

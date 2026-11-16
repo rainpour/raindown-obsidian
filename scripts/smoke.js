@@ -128,10 +128,11 @@ function durations(timings) {
   }).join(', ');
 }
 
-// The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives.
+// The worker's steps in starting, as how long each took, from the milliseconds since it began that it gives, and the
+// vault's read, which the engine does meanwhile, from when it began.
 function steps({ vaultRead, started, ...timings }) {
   const last = Object.values(timings).at(-1) ?? 0;
-  return [`vaultRead ${vaultRead}`, durations(timings), `worker script and messages ${started - vaultRead - last}`].join(', ');
+  return [`vaultRead ${vaultRead} meanwhile`, durations(timings), `worker script and messages ${started - last}`].join(', ');
 }
 
 async function smoke() {

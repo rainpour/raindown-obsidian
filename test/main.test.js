@@ -225,7 +225,7 @@ function fakeRuntime() {
 
 const bytes = (text) => new TextEncoder().encode(text);
 
-test("sends Raindown the vault's files it reads as it starts, with the front matter Obsidian's read, leaving out others", async () => {
+test("sends Raindown the vault's files it reads while Ruby starts, with the front matter Obsidian's read, leaving out others", async () => {
   const { vault } = fakeVault({
     'note.md': '# A', 'data/a.csv': 'a', '.raindown/shout.rb': 'class Shout', '.obsidian/app.json': '{}', '.git/HEAD.md': 'x', 'a.png': 'png'
   });
@@ -234,15 +234,16 @@ test("sends Raindown the vault's files it reads as it starts, with the front mat
   const engine = new RaindownEngine({ vault, metadataCache }, { runtime: fakeRuntime, Worker });
 
   await engine.start();
-  const [{ type, files, loadPaths, frontMatters }] = Worker.made[0].sent;
-  assert.deepEqual([type, files.map(([file]) => file).sort(), loadPaths], ['start', ['.raindown/shout.rb', 'data/a.csv', 'note.md'], ['/engine']]);
+  const [started, { type, files, frontMatters }] = Worker.made[0].sent;
+  assert.deepEqual([started.type, started.files, started.loadPaths], ['start', undefined, ['/engine']]);
+  assert.deepEqual([type, files.map(([file]) => file).sort()], ['vault', ['.raindown/shout.rb', 'data/a.csv', 'note.md']]);
   assert.deepEqual(frontMatters, { 'note.md': { tags: ['a'] } });
 
   await engine.fileChanged('notes/b.md');
   await engine.fileChanged('a.png');
   engine.fileRemoved('note.md');
   await new Promise((done) => { setTimeout(done, 0); });
-  assert.deepEqual(Worker.made[0].sent.slice(1).map(({ changed, removed }) => [changed?.map(([file]) => file), removed]), [
+  assert.deepEqual(Worker.made[0].sent.slice(2).map(({ changed, removed }) => [changed?.map(([file]) => file), removed]), [
     [[], undefined], [undefined, ['note.md']]
   ]);
 });
@@ -256,7 +257,7 @@ test('writes the files Raindown wrote to the vault, and hidden ones through its 
   const answer = await engine.rewrite({ path: 'note.md', markdown: '# A', bare: false }, { timeout: 1000 });
   assert.equal(answer.output, '# A');
   assert.deepEqual([files['data.csv'], files['new/c.csv'], files['.raindown/data/d.csv'], made], ['b', 'c', 'd', ['new/c.csv']]);
-  assert.deepEqual(Worker.made[0].sent[1], { id: 2, type: 'rewrite', path: 'note.md', markdown: '# A', bare: false });
+  assert.deepEqual(Worker.made[0].sent[2], { id: 2, type: 'rewrite', path: 'note.md', markdown: '# A', bare: false });
 });
 
 test('starts Raindown again when a file in a .raindown folder changes, so its nodes load again', async () => {
@@ -848,7 +849,7 @@ test("sends an endpoint's or a node's request from Raindown with Obsidian's requ
   await engine.receive({ id: 1, type: 'fetch', request: { method: 'POST', url: 'https://a.io/x', headers: { A: 'b' }, body: 'c' } });
   await engine.receive({ id: 2, type: 'fetch', request: { method: 'GET', url: 'http://2852039166/latest', headers: {}, body: null } });
   assert.deepEqual(sent, [{ url: 'https://a.io/x', method: 'POST', headers: { A: 'b' }, body: 'c', throw: false }]);
-  const [first, second] = Worker.made[0].sent.slice(1);
+  const [first, second] = Worker.made[0].sent.slice(2);
   assert.deepEqual([first.type, first.id, { ...first.response, milliseconds: 0 }], [
     'fetched', 1, { body: '{"id":1}', status: 201, headers: { 'Content-Type': 'application/json' }, content_type: 'application/json', milliseconds: 0 }
   ]);
