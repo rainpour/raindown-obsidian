@@ -1,9 +1,10 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# Builds main.js, which Obsidian loads, from src/, with Raindown inside it: packed with only the Ruby files it loads into
-# ruby.wasm's module, Ruby compiled to WebAssembly, compressed with gzip, in Z85, with ruby.wasm's browser bundle and the worker
-# that runs it.
+# Builds main.js, which Obsidian loads, from src/, with Raindown inside it: ruby.wasm's modules, Ruby compiled to
+# WebAssembly, compressed with gzip, in Z85, with only the Ruby files Raindown loads, ruby.wasm's browser bundle and the
+# worker that runs it. One module's without Asyncify, which the worker uses where the engine has JSPI, and the other's
+# Asyncify's, where it hasn't, like Safari.
 #   1. scripts/trace.rb writes back test/vault with a Raindown checkout, RAINDOWN_DIR or ../raindown, natively, in the
 #      same Ruby as ruby.wasm's, and lists what it wrote and the standard library files and gems that loaded, in
 #      build/loaded.json.
@@ -12,14 +13,16 @@
 #   3. With WASMTIME, each Ruby file's compiled to bytecode, at /bytecode, by ruby.wasm's WASI build, which is the same
 #      Ruby as the module, so src/bytecode.rb loads it rather than its source, halving how long Raindown takes to load.
 #      Its source is then left empty, so only its bytecode's packed.
-#   4. rbwasm, from the ruby_wasm gem, packs build/root into ruby.wasm's module, as build/raindown.wasm. The module's
-#      built by scripts/ruby_wasm.rb the first time, with only the extensions Raindown uses, and Ruby patched with
-#      wasm/patches, which takes a while.
+#   4. build/root's files go into main.js, which the worker gives Ruby, rather than either module, as wasi-vfs can't pack
+#      the one without Asyncify. The modules are built by scripts/ruby_wasm.rb the first time, with only the extensions
+#      Raindown uses, and Ruby patched with wasm/patches, which takes a while, the one without Asyncify from the
+#      wasi-sdk and Binaryen downloaded into build/runtime, or WASI_SDK_PATH and BINARYEN.
 #   5. scripts/smoke.js runs main.js's worker on test/vault, with Node, and checks it wrote back what step 1 did, and
-#      scripts/jumps.js checks Ruby's jumps in the module are native Ruby's. They're skipped without Node, except in CI.
+#      scripts/jumps.js checks Ruby's jumps in the module are native Ruby's, with each module, the one without Asyncify
+#      with Node 26's JSPI. They're skipped without Node, except in CI.
 # Releases are built by CI, with Raindown at RAINDOWN_VERSION, and main.js isn't committed.
 # ruby.wasm's WASI build and npm package are downloaded into build/runtime, or are RUBY_WASI and RUBY_NPM, and its
-# module's built there, or is RUBY_WASM, with rbwasm and the js gem from wasm/Gemfile.
+# modules are built there, or are RUBY_WASM and RUBY_WASM_JSPI, with rbwasm and the js gem from wasm/Gemfile.
 #   BUNDLE_GEMFILE=../raindown/Gemfile bundle install
 #   BUNDLE_GEMFILE=wasm/Gemfile bundle install
 #   BUNDLE_GEMFILE=wasm/Gemfile RAINDOWN_DIR=../raindown WASMTIME=~/.wasmtime/bin/wasmtime bundle exec bin/build
@@ -79,17 +82,46 @@ def ruby_wasi
 end
 
 # ruby.wasm's module, built with only the extensions Raindown uses, and Ruby's source patched with wasm/patches, named
-# by what it's built from, so a change to them builds it again.
-def ruby_module
-  return File.expand_path(ENV['RUBY_WASM']) if ENV['RUBY_WASM']
+# by what it's built from, so a change to them builds it again, or without Asyncify, with jspi, from the wasi-sdk and
+# Binaryen it needs.
+def ruby_module(jspi: false)
+  given = ENV[jspi ? 'RUBY_WASM_JSPI' : 'RUBY_WASM']
+  return File.expand_path(given) if given
 
-  inputs = [*%w[scripts/ruby_wasm.rb wasm/Gemfile.lock], *Dir.glob('wasm/patches/*', base: ROOT).sort].map { File.read(File.join(ROOT, it)) }.join
-  path = File.join(BUILD, 'module', "ruby-#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
+  patches = Dir.glob('wasm/patches/**/*.patch', base: ROOT).sort
+  inputs = [*%w[scripts/ruby_wasm.rb wasm/Gemfile.lock], *patches].map { File.read(File.join(ROOT, it)) }.join
+  path = File.join(BUILD, 'module', "ruby-#{'jspi-' if jspi}#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
   return path if File.exist?(path)
 
   FileUtils.mkdir_p(File.dirname(path))
-  run(WASM_GEMS.merge('RUBY_WASM_ROOT' => File.join(BUILD, 'ruby_wasm')), *BUNDLED, 'ruby', File.join(ROOT, 'scripts', 'ruby_wasm.rb'), path)
+  env = WASM_GEMS.merge('RUBY_WASM_ROOT' => File.join(BUILD, 'ruby_wasm'))
+  env = env.merge('WASI_SDK_PATH' => wasi_sdk, 'BINARYEN' => binaryen) if jspi
+  run(env, *BUNDLED, 'ruby', File.join(ROOT, 'scripts', 'ruby_wasm.rb'), path, *('--jspi' if jspi))
   path
+end
+
+# The wasi-sdk and Binaryen the module without Asyncify's built with, for this computer, as their releases name it: a
+# wasi-sdk with LLVM 19 or later, whose setjmp keeps its state in the jmp_buf, rather than allocating, and a Binaryen
+# with --spill-pointers, which rbwasm's hasn't got.
+WASI_SDK_VERSION = '34'
+BINARYEN_VERSION = '131'
+HOST_OS = RUBY_PLATFORM.include?('darwin') ? 'macos' : 'linux'
+HOST_ARCH = RbConfig::CONFIG['host_cpu'].match?(/arm|aarch64/) ? 'arm64' : 'x86_64'
+
+def wasi_sdk
+  return ENV['WASI_SDK_PATH'] if ENV['WASI_SDK_PATH']
+
+  name = "wasi-sdk-#{WASI_SDK_VERSION}.0-#{HOST_ARCH}-#{HOST_OS}"
+  File.join(runtime(name, "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-#{WASI_SDK_VERSION}/#{name}.tar.gz"), name)
+end
+
+def binaryen
+  return ENV['BINARYEN'] if ENV['BINARYEN']
+
+  arch = HOST_ARCH == 'arm64' && HOST_OS == 'linux' ? 'aarch64' : HOST_ARCH
+  name = "binaryen-version_#{BINARYEN_VERSION}"
+  release = "https://github.com/WebAssembly/binaryen/releases/download/version_#{BINARYEN_VERSION}"
+  File.join(runtime("#{name}-#{arch}-#{HOST_OS}", "#{release}/#{name}-#{arch}-#{HOST_OS}.tar.gz"), name)
 end
 
 def command?(name)
@@ -173,10 +205,18 @@ if ENV['WASMTIME']
   puts "Packed #{emptied} files as bytecode only"
 end
 
-# 4. Packed.
+# 4. Packed into main.js, with the js gem's files, which rbwasm packs into a module otherwise, and a /bundle/setup.rb,
+# which ruby.wasm's browser bundle loads, that finds them.
+copy(File.join(Gem::Specification.find_by_name('js').full_gem_path, 'lib'), File.join(STAGE, 'bundle', 'js', 'lib'))
+File.write(File.join(STAGE, 'bundle', 'setup.rb'), "$LOAD_PATH.unshift('/bundle/js/lib')\n")
+folders << 'bundle'
+root_files = folders.flat_map { |folder| Dir.glob("#{folder}/**/*", base: STAGE) }
+                    .select { File.file?(File.join(STAGE, it)) }
+                    .map { [it, [File.binread(File.join(STAGE, it))].pack('m0')] }
 wasm = File.join(BUILD, 'raindown.wasm')
-run(WASM_GEMS, *BUNDLED, 'rbwasm', 'pack', ruby_module, '-o', wasm,
-    *folders.flat_map { ['--dir', "#{File.join(STAGE, it)}::/#{it}"] })
+FileUtils.cp(ruby_module, wasm)
+wasm_jspi = File.join(BUILD, 'raindown-jspi.wasm')
+FileUtils.cp(ruby_module(jspi: true), wasm_jspi)
 
 # main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
 # WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
@@ -187,11 +227,15 @@ end
 abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" unless browser.include?('Object.assign(exports, { RubyVM')
 worker = [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
 compressed = gzipped(wasm)
+compressed_jspi = gzipped(wasm_jspi)
 runtime = {
   wasm: z85(compressed),
   wasmSize: compressed.bytesize,
+  wasmJspi: z85(compressed_jspi),
+  wasmJspiSize: compressed_jspi.bytesize,
   worker:,
-  loadPaths: load_paths
+  loadPaths: load_paths,
+  rootFiles: root_files
 }
 sources = {
   './runtime' => "module.exports = #{JSON.generate(runtime)};",
@@ -217,12 +261,17 @@ File.write(File.join(ROOT, 'main.js'), <<~JS)
   }
   module.exports = load('./plugin');
 JS
-puts format('Built main.js: %.2f MB, with Raindown packed into %.2f MB', File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6)
-# Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's.
+puts format('Built main.js: %.2f MB, with ruby.wasm\'s modules of %.2f MB, and %.2f MB without Asyncify',
+            File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6, File.size(wasm_jspi) / 1e6)
+# Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's, with
+# Asyncify's module, with JSPI hidden, as in Safari, then with the one without it, with Node 26's JSPI.
 # CI has Node, so a release is always checked, but working on the plugin doesn't need it.
 if ENV['CI'] || system('node', '--version', out: File::NULL, err: File::NULL)
+  browser_bundle = File.join(ruby_npm, 'browser.umd.js')
+  run({ 'RAINDOWN_WITHOUT_JSPI' => '1' }, 'node', File.join(ROOT, 'scripts', 'smoke.js'))
+  run(*MISE, 'node', File.join(ROOT, 'scripts', 'jumps.js'), wasm, browser_bundle, STAGE)
   run('node', File.join(ROOT, 'scripts', 'smoke.js'))
-  run(*MISE, 'node', File.join(ROOT, 'scripts', 'jumps.js'), wasm, File.join(ruby_npm, 'browser.umd.js'))
+  run(*MISE, 'node', File.join(ROOT, 'scripts', 'jumps.js'), wasm_jspi, browser_bundle, STAGE)
 else
   puts 'Smoke test skipped: no Node, which CI runs it with'
 end

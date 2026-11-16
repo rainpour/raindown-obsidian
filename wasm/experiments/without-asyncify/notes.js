@@ -1,13 +1,17 @@
 'use strict';
 
 // Each note's median write-back, in milliseconds, by a main.js's engine and worker, run in Node as the smoke test runs
-// it, over a vault, as JSON, with how long Raindown took to start. Built with a worker that answers with vm.eval, as
-// Fibers trap without Asyncify, so a vault's JavaScript components and Raindown's services, which wait with evalAsync,
-// can't be used, and a note that needs them gives why it failed instead.
-//   node notes.js main.js VAULT [NOTE.md ...]
+// it, over a vault, as JSON, with how long Raindown took to start, and whether with JSPI, which Node 26 has, or
+// Asyncify, with RAINDOWN_WITHOUT_JSPI, or why a note wasn't written back.
+//   [RAINDOWN_WITHOUT_JSPI=1] node notes.js main.js VAULT [NOTE.md ...]
 const fs = require('node:fs');
 const path = require('node:path');
 const { resolveObjectURL } = require('node:buffer');
+
+if (process.env.RAINDOWN_WITHOUT_JSPI) {
+  delete WebAssembly.Suspending;
+  delete WebAssembly.promising;
+}
 
 const [mainJs, folder, ...only] = process.argv.slice(2);
 const EXPORT = "module.exports = load('./plugin');";
@@ -74,7 +78,7 @@ function vaultApp(root) {
 // New props each run, so every node is made again, not kept from the last.
 const withNewProps = (markdown) => markdown.replace(/\bn(: |=)\d+/g, (_, separator) => `n${separator}${Math.floor(Math.random() * 100000)}`);
 
-// Each note's median write-back in milliseconds, or why it couldn't be written back, as Fibers trap without Asyncify.
+// Each note's median write-back in milliseconds, or why it couldn't be written back.
 async function median(engine, note) {
   const markdown = fs.readFileSync(path.join(folder, note), 'utf8');
   const times = [];
@@ -105,7 +109,7 @@ async function bench() {
     engine.stop();
     console.debug = log;
   }
-  console.log(JSON.stringify({ started: engine.timings, times }));
+  console.log(JSON.stringify({ jspi: engine.jspi, started: engine.timings, times }));
 }
 
 bench().catch((error) => {

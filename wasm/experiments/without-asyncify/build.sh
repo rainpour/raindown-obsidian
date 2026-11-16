@@ -1,7 +1,8 @@
 #!/bin/bash
 # A minimal ruby.wasm, without gems or the js gem, configured as the plugin's, for timing Ruby itself: from Ruby 4.0's
-# tarball in rbwasm's build folder, with the plugin's jumps and shapes patches and Asyncify, or with eh, this folder's
-# patch and the shapes patch, without Asyncify. bin/build fetches what it needs, like the tarball, the first time.
+# tarball in rbwasm's build folder, with the plugin's jumps and shapes patches and Asyncify, or with eh, the shapes
+# patch and wasm/patches/jspi's, without Asyncify, as the plugin's module for JSPI is. Its Fibers switch
+# with JSPI, so run it with run-jspi.js. bin/build fetches what it needs, like the tarball, the first time.
 #   wasm/experiments/without-asyncify/build.sh OUT [eh]
 # Each is OUT/ruby. Without Asyncify, it needs a Binaryen with --spill-pointers, like version_131, as BINARYEN, and a
 # wasi-sdk with LLVM 19 or later, like wasi-sdk 34, as WASI_SDK, is faster than rbwasm's wasi-sdk 24.
@@ -18,7 +19,7 @@ EH_FLAGS="" LIBS="" CPPFLAGS="" PATCHES="$ROOT/wasm/patches/ruby-4.0-wasm-jumps.
 if [ "$MODE" = eh ]; then
   [ -n "$BINARYEN" ] || { echo "Set BINARYEN to a Binaryen with --spill-pointers, like version_131" >&2; exit 1; }
   EH_FLAGS="-mllvm -wasm-enable-sjlj -mexception-handling" LIBS="-lsetjmp" CPPFLAGS="-DRB_WASM_EH"
-  PATCHES="$HERE/ruby-4.0-without-asyncify.patch"
+  PATCHES="$ROOT/wasm/patches/jspi/ruby-4.0-jspi.patch"
 fi
 
 rm -rf "$OUT/src" && mkdir -p "$OUT/src"

@@ -24,9 +24,10 @@ jobs:
       artifact-metadata: write
     steps:
       - uses: actions/checkout@v7
+      # 26, which has JSPI, which the smoke test runs the module without Asyncify with.
       - uses: actions/setup-node@v7
         with:
-          node-version: 22
+          node-version: 26
       - run: npm test
       - name: Check the tag is the manifest's version
         if: startsWith(github.ref, 'refs/tags/')
@@ -53,16 +54,17 @@ jobs:
       # Which compresses ruby.wasm's module into main.js.
       - name: Install zopfli
         run: sudo apt-get install -y zopfli
-      # ruby.wasm's downloads, which bin/build names the versions of.
+      # ruby.wasm's downloads, and the wasi-sdk and Binaryen the module without Asyncify's built with, which bin/build
+      # names the versions of.
       - uses: actions/cache@v5
         with:
           path: build/runtime
           key: ruby-wasm-${{ hashFiles('bin/build') }}
-      # The module scripts/ruby_wasm.rb builds, which takes a while, so only what it's built from builds it again.
+      # The modules scripts/ruby_wasm.rb builds, which takes a while, so only what they're built from builds them again.
       - uses: actions/cache@v5
         with:
           path: build/module
-          key: ruby-wasm-module-${{ hashFiles('scripts/ruby_wasm.rb', 'wasm/Gemfile.lock', 'wasm/patches/*') }}
+          key: ruby-wasm-module-${{ hashFiles('scripts/ruby_wasm.rb', 'wasm/Gemfile.lock', 'wasm/patches/**') }}
       - name: Build main.js, and run the smoke test
         run: RAINDOWN_DIR=build/raindown WASMTIME="$(which wasmtime)" bin/build
 

@@ -4,12 +4,20 @@
 // checks each note's written back, and rendered for reading view, as native Raindown did, in build/loaded.json, and
 // that an endpoint runs, through requestUrl, which is Node's fetch here. bin/build runs it once main.js is
 // built, so a file missing from the module, or a ruby.wasm update breaking the worker, fails the build, not a release.
+// The worker uses the module without Asyncify, with Node 26's JSPI, or with RAINDOWN_WITHOUT_JSPI, Asyncify's, as
+// without JSPI, like in Safari, which Node can't turn off, so it's hidden here.
 //   node scripts/smoke.js
+//   RAINDOWN_WITHOUT_JSPI=1 node scripts/smoke.js
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const http = require('node:http');
 const { resolveObjectURL } = require('node:buffer');
+
+if (process.env.RAINDOWN_WITHOUT_JSPI) {
+  delete WebAssembly.Suspending;
+  delete WebAssembly.promising;
+}
 
 const ROOT = path.join(__dirname, '..');
 const EXPORT = "module.exports = load('./plugin');";
@@ -141,7 +149,7 @@ async function smoke() {
     const first = performance.now();
     await engine.rewrite({ path: firstNote, markdown: fs.readFileSync(path.join(folder, firstNote), 'utf8'), bare: false }, { timeout: 60000 });
     const firstWrite = Math.round(performance.now() - first);
-    console.log(`Started in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
+    console.log(`Started with ${engine.jspi ? 'JSPI' : 'Asyncify'} in ${engine.timings.started} ms, and wrote back ${firstNote} in ${firstWrite} ms: ${steps(engine.timings)}`);
     failures = [
       ...await checkNotes(engine, folder, answers, 'rewrite', timed), ...await checkNotes(engine, folder, renders, 'render', timed),
       ...await checkEndpoint(engine)

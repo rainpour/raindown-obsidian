@@ -10,16 +10,23 @@
 # before, so it's built clean. Ruby's source is patched with wasm/patches, which make its jumps, like an exception, a
 # break or an ensure, many times faster in WebAssembly, as each patch says. rbwasm only
 # patches the source as it extracts it, so one extracted before is extracted again. Then it strips its debug sections,
-# as the npm package's is.
+# as the npm package's is. It isn't packed with Ruby's files, with wasi-vfs, which can't compile the module without
+# Asyncify, but main.js has them, which the worker gives Ruby, so both modules have them once.
+# With --jspi, it's the module without Asyncify, for engines with JSPI, patched with wasm/patches/jspi,
+# rather than the jumps patch, from the wasi-sdk WASI_SDK_PATH is and the Binaryen BINARYEN is, which bin/build
+# downloads, put first in PATH here, where rbwasm finds wasm-opt, as Bundler gives PATH back as it was before bin/build.
 # bin/build runs it, with wasm/Gemfile's gems:
-#   BUNDLE_GEMFILE=wasm/Gemfile RUBY_WASM_ROOT=build/ruby_wasm bundle exec ruby scripts/ruby_wasm.rb OUTPUT
+#   BUNDLE_GEMFILE=wasm/Gemfile RUBY_WASM_ROOT=build/ruby_wasm bundle exec ruby scripts/ruby_wasm.rb OUTPUT [--jspi]
 require 'fileutils'
 require 'ruby_wasm'
 require 'ruby_wasm/cli'
 require 'tmpdir'
 
 RUBY_VERSION_BUILT = '4.0'
-PATCHES = Dir[File.expand_path("../wasm/patches/ruby-#{RUBY_VERSION_BUILT}-*.patch", __dir__)].freeze
+JSPI = ARGV.include?('--jspi')
+PATCHES = Dir[File.expand_path("../wasm/patches/ruby-#{RUBY_VERSION_BUILT}-*.patch", __dir__)]
+          .then { JSPI ? it.grep_v(/-jumps\.patch\z/) + Dir[File.expand_path('../wasm/patches/jspi/*.patch', __dir__)] : it }
+          .sort.freeze
 
 TRANSCODERS_LEFT_OUT = %w[
   big5 chinese gb18030 gbk korean japanese japanese_euc japanese_sjis iso2022 emoji emoji_iso2022_kddi emoji_sjis_docomo
@@ -62,6 +69,44 @@ module HostRubyWithoutOpenSSL
   end
 end
 RubyWasm::BaseRubyProduct.prepend(HostRubyWithoutOpenSSL)
+
+# Without Asyncify, with --jspi: setjmp from WebAssembly exception handling, and RB_WASM_EH, for the patch, and
+# wasm-opt's options without -g, as Binaryen's DWARF handling fails on Ruby's, after the patched configure's passes.
+module WithoutAsyncify
+  EH = '-mllvm -wasm-enable-sjlj -mexception-handling'
+
+  def configure_args(build_triple, toolchain)
+    args = super.filter_map do |arg|
+      case arg
+      when /\ACFLAGS=/, /\ALDFLAGS=/ then "#{arg} #{EH}"
+      when /\Acppflags=/ then "#{arg} -DRB_WASM_EH"
+      when /\Awasmoptflags=/ then nil
+      else arg
+      end
+    end
+    args + ['LIBS=-lsetjmp', 'wasmoptflags=-O3 --strip-dwarf --enable-exception-handling']
+  end
+end
+if JSPI
+  RubyWasm::CrossRubyProduct.prepend(WithoutAsyncify)
+  ENV['PATH'] = "#{File.join(ENV.fetch('BINARYEN'), 'bin')}#{File::PATH_SEPARATOR}#{ENV.fetch('PATH')}"
+end
+
+# The module as it's linked, without wasi-vfs packing Ruby's files into it, which main.js has, once rbwasm's extension,
+# with wasi-vfs, loads.
+module Unpacked
+  def pack(wasm_bytes) = wasm_bytes
+end
+
+module UnpackedExtension
+  private
+
+  def require_extension
+    super
+    RubyWasmExt::WasiVfs.prepend(Unpacked)
+  end
+end
+RubyWasm::CLI.prepend(UnpackedExtension)
 
 # A WebAssembly module's bytes without its custom sections for debugging: DWARF's, named .debug_*, and its functions'
 # names.
@@ -112,5 +157,5 @@ Dir.mktmpdir do |dir|
   )
   File.binwrite(output, Stripped.module_bytes(File.binread(built)))
 end
-puts format('Built ruby.wasm: %.1f MB, with %s, patched with %s', File.size(output) / 1e6, EXTENSIONS.tr(',', ' '),
+puts format('Built ruby.wasm%s: %.1f MB, with %s, patched with %s', JSPI ? ' without Asyncify' : '', File.size(output) / 1e6, EXTENSIONS.tr(',', ' '),
             PATCHES.map { File.basename(it) }.join(', '))

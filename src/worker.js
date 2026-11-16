@@ -1,14 +1,15 @@
 'use strict';
 
 // Runs in a Web Worker, after ruby.wasm's browser bundle, which gives it ruby-wasm-wasi, with RubyVM and the WASI
-// classes the build adds to it. It starts Ruby once, from the module bin/build packed Raindown into, with the vault
-// mirrored at /vault in Ruby's in-memory folder, then writes back each note it's asked to on the Ruby it kept running, so
-// Obsidian never waits for it. Ruby can't wait for Obsidian to read a file, so the plugin sends the vault's files ahead,
-// and each change to them, and gets back the files Raindown wrote, like a table's CSV. Raindown is told which changed at
-// each write-back, and given the front matter Obsidian's already read, so it never reads or checks every note itself.
-// Ruby waits on the worker for what it can't do in WebAssembly: an endpoint's request, which Obsidian sends, a
-// project's JavaScript Components, which run here, and Raindown's services, for its Ruby and JavaScript nodes, which
-// are answered here, after services.js, which bin/build puts before this, from Raindown.
+// classes the build adds to it. It starts Ruby once, from the module without Asyncify where the engine has JSPI, or
+// else Asyncify's, with Raindown's files and the vault mirrored in Ruby's in-memory folders, the vault at /vault, then
+// writes back each note it's asked to on the Ruby it kept running, so Obsidian never waits for it. Ruby can't wait for
+// Obsidian to read a file, so the plugin sends the vault's files ahead, and each change to them, and gets back the
+// files Raindown wrote, like a table's CSV. Raindown is told which changed at each write-back, and given the front
+// matter Obsidian's already read, so it never reads or checks every note itself. Ruby waits on the worker for what it
+// can't do in WebAssembly: an endpoint's request, which Obsidian sends, a project's JavaScript Components, which run
+// here, and Raindown's services, for its Ruby and JavaScript nodes, which are answered here, after services.js, which
+// bin/build puts before this, from Raindown.
 const { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory } = self['ruby-wasm-wasi'];
 const ARGS = ['ruby.wasm', '--disable-gems', '-EUTF-8', '-e_=0'];
 const REQUEST = 'request.json';
@@ -16,6 +17,11 @@ const FRONT_MATTERS = 'front_matters.json';
 
 let root;
 let vm;
+// Whether Ruby's the module without Asyncify, which waits for JavaScript, and switches Fibers, with JSPI, JavaScript
+// Promise Integration, where the engine has it, and rb_wasm_jspi_eval, which runs Ruby that can, through
+// WebAssembly.promising, which it waits for, rather than evalAsync.
+let jspi = false;
+let jspiEval;
 // The vault's name, which its cache is kept under, as every vault's at /vault.
 let vaultName = '';
 // The data each file had when it was last sent or written, to find those Raindown's written since.
@@ -51,20 +57,34 @@ async function answer(data) {
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
 // each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, files, frontMatters = {}, vault = '' }) {
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
   vaultName = vault;
-  const bytes = fromZ85(wasm, wasmSize);
+  jspi = Boolean(wasmJspi) && typeof WebAssembly.Suspending === 'function' && typeof WebAssembly.promising === 'function';
+  const bytes = jspi ? fromZ85(wasmJspi, wasmJspiSize) : fromZ85(wasm, wasmSize);
   mark('decoded');
   const decompressing = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'))
     .pipeThrough(new TransformStream({ flush: () => mark('decompressed') }));
   const module = await compiled(decompressing);
   mark('compiled');
   root = new PreopenDirectory('/', new Map());
+  // Ruby's files, which main.js has, rather than its module, with the js gem's and a /bundle/setup.rb that finds them.
+  for (const [file, base64] of rootFiles || []) {
+    const parts = file.split('/');
+    folderAt(parts.slice(0, -1)).contents.set(parts.at(-1), new File(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))));
+  }
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
-  ({ vm } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS }));
+  const exported = {};
+  const addToImports = (imports) => { if (jspi) imports.rb_wasm_jspi = jspiImports(exported); };
+  const { vm: started, instance } = await RubyVM.instantiateModule({ module, wasip1: wasi, args: ARGS, addToImports });
+  vm = started;
+  if (jspi) {
+    exported.fiberStart = WebAssembly.promising(instance.exports.rb_wasm_jspi_fiber_start);
+    jspiEval = WebAssembly.promising(instance.exports.rb_wasm_jspi_eval);
+    instance.exports.rb_wasm_jspi_define();
+  }
   mark('rubyStarted');
   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
   folderAt(['vault', '.obsidian']);
@@ -79,6 +99,7 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
     `$LOAD_PATH.unshift(*${JSON.stringify(loadPaths)})`,
     "require 'engine'",
     "require 'worker'",
+    jspi ? JSPI_RUBY : '',
     'GC.enable'
   ].join('\n'));
   mark('raindownLoaded');
@@ -86,7 +107,7 @@ async function start({ wasm, wasmSize, loadPaths, files, frontMatters = {}, vaul
   root.dir.contents.set(FRONT_MATTERS, new File(new TextEncoder().encode(JSON.stringify(watched))));
   vm.eval(`RaindownEngine.watch('/${FRONT_MATTERS}')`);
   mark('watching');
-  return { ready: true, timings };
+  return { ready: true, timings, jspi };
 }
 
 // The module, compiled as it's decompressed, where WebAssembly can compile a stream, or else once it's all there.
@@ -106,7 +127,7 @@ async function rewrite({ type, path, markdown, bare, execute }) {
   changes.clear();
   root.dir.contents.set(REQUEST, new File(new TextEncoder().encode(JSON.stringify(request))));
   const requested = performance.now() - began;
-  const json = (await vm.evalAsync(`RaindownEngine.answer('/${REQUEST}')`)).toString();
+  const json = (await evalWaiting(`RaindownEngine.answer('/${REQUEST}')`)).toString();
   const ruby = performance.now() - began;
   const { timings = {}, ...answer } = JSON.parse(json);
   const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
@@ -115,6 +136,96 @@ async function rewrite({ type, path, markdown, bare, execute }) {
     ...answer, written,
     timings: { requested, ...rubySteps, ruby, filesCollected: performance.now() - began }
   };
+}
+
+// rb_wasm_jspi's imports, each a WebAssembly.Suspending, which suspends the stack of Ruby that calls it: switch, between
+// Fibers, each a stack of its own, until something switches back to the one that called it, resuming the one it
+// switches to, or starting a new one's, with rb_wasm_jspi_fiber_start, and await, until the promise Ruby keeps by its
+// id, in rbJspiPending, settles, with its value in rbJspiResults, and whether it failed.
+function jspiImports(exported) {
+  const suspended = new Map();
+  const pending = new Map();
+  const results = new Map();
+  Object.assign(globalThis, { rbJspiPending: pending, rbJspiResults: results });
+  return {
+    switch: new WebAssembly.Suspending((from, to, start) => {
+      const back = new Promise((resolve) => suspended.set(from, resolve));
+      queueMicrotask(() => {
+        if (start) return exported.fiberStart(to).catch((error) => console.error('Raindown: a Fiber failed', error));
+
+        const resume = suspended.get(to);
+        suspended.delete(to);
+        resume();
+      });
+      return back;
+    }),
+    await: new WebAssembly.Suspending(async (id) => {
+      try {
+        results.set(id, await pending.get(id));
+        return 0;
+      } catch (error) {
+        results.set(id, error);
+        return 1;
+      } finally {
+        pending.delete(id);
+      }
+    })
+  };
+}
+
+// Ruby's side, for the module without Asyncify: RbWasmJSPI.run, which rb_wasm_jspi_eval runs, calls the code it's
+// given in a Fiber, as evalAsync does, keeping what it gives or raises, so too deep a stack raises SystemStackError at
+// the Fiber's machine stack's end, before JSPI's stack, of 984 KB, overflows, and JS::Object#await waits with RbWasmJSPI.wait, which rb_wasm_jspi_define
+// defines, rather than switching to a Fiber that JavaScript resumes, which a stack of JSPI's can't do.
+const JSPI_RUBY = `
+module RbWasmJSPI
+  class << self
+    attr_writer :entry
+
+    def run
+      @running = true
+      @error = nil
+      @result = Fiber.new { @entry.call }.resume
+    rescue Exception => e
+      @error = e
+    ensure
+      @running = false
+    end
+
+    def running? = @running
+
+    def take
+      raise @error if @error
+
+      @result
+    end
+  end
+end
+
+class JS::PromiseScheduler
+  def await(promise)
+    raise 'JS::Object#await can be called only from RbWasmJSPI.run' unless RbWasmJSPI.running?
+
+    id = (@jspi_id = (@jspi_id || 0) + 1)
+    JS.global[:rbJspiPending].call(:set, id, promise)
+    failed = RbWasmJSPI.wait(id)
+    results = JS.global[:rbJspiResults]
+    value = results.call(:get, id)
+    results.call(:delete, id)
+    raise JS::Error.new(value) if failed
+
+    value
+  end
+end
+`;
+
+// Ruby's value for code that can wait for JavaScript: through rb_wasm_jspi_eval without Asyncify, or evalAsync.
+async function evalWaiting(code) {
+  if (!jspi) return vm.evalAsync(code);
+
+  vm.eval(`RbWasmJSPI.entry = -> { ${code} }`);
+  await jspiEval();
+  return vm.eval('RbWasmJSPI.take');
 }
 
 // Z85's bytes, cut to their size, as bin/build pads them to a multiple of 4.
