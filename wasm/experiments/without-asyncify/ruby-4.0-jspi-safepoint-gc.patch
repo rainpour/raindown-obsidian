@@ -1,0 +1,101 @@
+Ruby without Asyncify collecting garbage only at interrupt checks, an experiment, built with RB_WASM_SAFEPOINT_GC and
+binaryen-131-safepoint.patch's --spill-pointers, given rb_wasm_safepoint_gc as what collects, so locals are spilled
+only at calls that can reach it and return, where every frame on the stack is when it collects:
+
+1. gc_start refuses anywhere else, GC.start too, as GC.disable does, so the heap grows until the next interrupt check,
+   which rb_wasm_gc_refused asks for, in gc/default/default.c and gc.c.
+2. rb_threadptr_execute_interrupts collects, as Ruby wanted to, marking and sweeping at once, with
+   rb_wasm_safepoint_gc, in thread.c and gc.c, so no marking or sweeping's left for gc_continue or gc_rest, which, with
+   garbage_collect and gc_start, the pass is told can't reach it.
+
+--- a/gc/default/default.c
++++ b/gc/default/default.c
+@@ -6295,6 +6295,19 @@
+     }
+ }
+ 
++#ifdef RB_WASM_SAFEPOINT_GC
++/*
++  Garbage collection only reads locals spilled at calls that can reach rb_wasm_safepoint_gc, so it only collects there,
++  at an interrupt check, where every frame on the stack is one. Anywhere else it's refused, as with GC.disable, so the
++  heap grows until then, and rb_wasm_gc_refused asks for an interrupt check, which collects as Ruby wanted to.
++*/
++int rb_wasm_gc_safe;
++void rb_wasm_gc_refused(unsigned int reason);
++# define wasm_gc_refused(reason) (!rb_wasm_gc_safe && (rb_wasm_gc_refused(reason), 1))
++#else
++# define wasm_gc_refused(reason) 0
++#endif
++
+ static int
+ ready_to_gc(rb_objspace_t *objspace)
+ {
+@@ -6408,6 +6421,10 @@
+     unsigned int do_full_mark = !!(reason & GPR_FLAG_FULL_MARK);
+ 
+     if (!rb_darray_size(objspace->heap_pages.sorted)) return TRUE; /* heap is not ready */
++    if (wasm_gc_refused(reason)) {
++        for (int i = 0; i < HEAP_COUNT; i++) heap_ready_to_gc(objspace, &heaps[i]);
++        return TRUE;
++    }
+     if (!(reason & GPR_FLAG_METHOD) && !ready_to_gc(objspace)) return TRUE; /* GC is not allowed */
+ 
+     GC_ASSERT(gc_mode(objspace) == gc_mode_none, "gc_mode is %s\n", gc_mode_name(gc_mode(objspace)));
+--- a/gc.c
++++ b/gc.c
+@@ -5636,3 +5636,32 @@
+     errno = 0;
+ #endif
+ }
++
++#ifdef RB_WASM_SAFEPOINT_GC
++static unsigned int rb_wasm_gc_wanted;
++
++/* A collection refused, with why, for rb_wasm_safepoint_gc at the next interrupt check. */
++void
++rb_wasm_gc_refused(unsigned int reason)
++{
++    rb_execution_context_t *ec = rb_current_execution_context(false);
++    rb_wasm_gc_wanted |= reason | GPR_FLAG_NEWOBJ;
++    if (ec) RUBY_VM_SET_POSTPONED_JOB_INTERRUPT(ec);
++}
++
++/*
++  Collects as Ruby wanted to, at an interrupt check, marking and sweeping at once, so nothing's left to finish
++  elsewhere, as Binaryen's --spill-pointers, given this function, spills each local at every call that can reach it.
++*/
++void
++rb_wasm_safepoint_gc(void)
++{
++    unsigned int reason = rb_wasm_gc_wanted;
++    if (!reason) return;
++
++    rb_wasm_gc_wanted = 0;
++    rb_wasm_gc_safe = 1;
++    garbage_collect(rb_gc_get_objspace(), reason | GPR_FLAG_IMMEDIATE_MARK | GPR_FLAG_IMMEDIATE_SWEEP);
++    rb_wasm_gc_safe = 0;
++}
++#endif
+--- a/thread.c
++++ b/thread.c
+@@ -2613,6 +2613,10 @@
+ //   * during VM shutdown (`rb_ractor_terminate_all`)
+ //   * Call to Thread#exit for current thread (`rb_thread_kill`)
+ //   * Call to Thread#raise for current thread
++#ifdef RB_WASM_SAFEPOINT_GC
++void rb_wasm_safepoint_gc(void);
++#endif
++
+ int
+ rb_threadptr_execute_interrupts(rb_thread_t *th, int blocking_timing)
+ {
+@@ -2642,6 +2646,9 @@
+         }
+ 
+         if (postponed_job_interrupt) {
++#ifdef RB_WASM_SAFEPOINT_GC
++            rb_wasm_safepoint_gc();
++#endif
+             rb_postponed_job_flush(th->vm);
+         }
+ 

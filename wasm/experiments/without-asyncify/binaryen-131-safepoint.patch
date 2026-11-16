@@ -1,0 +1,431 @@
+Binaryen 131's --spill-pointers for collecting only at interrupt checks, with ruby-4.0-jspi-safepoint-gc.patch, an
+experiment, from binaryen-131-spill-pointers.patch: a call's spilled around only if what it calls can reach the
+function spill-pointers-gc names and return, or it's in a try, which catches a jump, and can reach it at all, as a
+frame a jump unwinds through never resumes. An indirect call reaches it through the functions of its type in a table,
+and calls to the functions spill-pointers-cut names don't. Applied to Binaryen's source, and built, as that patch
+says, then run in place of the configure's --spill-pointers as
+  --flatten --coalesce-locals --spill-pointers --pass-arg=spill-pointers-gc@rb_wasm_safepoint_gc \
+    --pass-arg=spill-pointers-cut@garbage_collect,gc_start,gc_rest,gc_continue -O3
+with SPILL_POINTERS_DEBUG set to say how many functions can collect, and SPILL_POINTERS_WHY, functions separated by
+commas, for how each can.
+
+--- a/src/passes/SpillPointers.cpp
++++ b/src/passes/SpillPointers.cpp
+@@ -25,8 +25,29 @@
+ //  * There is currently no check that there is enough stack space.
+ //
+ 
++// Spilling less, for Ruby in WebAssembly, whose garbage collection reads the stack:
++//
++//  * A call to a function that can't reach garbage collection isn't spilled
++//    around: one that can is one of the functions the pass-arg
++//    spill-pointers-gc names, separated by commas, like those that read the
++//    stack, or an import other than WASI's, or makes an indirect call, or
++//    calls such a function. Without any of them, every call's spilled around,
++//    as before.
++//  * A local that can't be a pointer into the heap isn't spilled: one only
++//    set to constants, comparisons, loads of fewer than 4 bytes, values masked
++//    or shifted below 64 KB, or locals like it. Parameters can be anything.
++//  * A local already spilled at an earlier call in the block, and not set
++//    since, isn't spilled again, as its place on the stack has it.
++
++#include <cstdlib>
++#include <mutex>
++#include <iostream>
++#include <sstream>
++
+ #include "abi/stack.h"
+ #include "cfg/liveness-traversal.h"
++#include "ir/element-utils.h"
++#include "ir/find_all.h"
+ #include "pass.h"
+ #include "wasm-builder.h"
+ #include "wasm.h"
+@@ -40,10 +61,234 @@
+   // Adds writes to memory.
+   bool addsEffects() override { return true; }
+ 
++  // The functions that can reach garbage collection, or null, for every
++  // function, found once for the module, as each function's walked in
++  // parallel, by its own instance of the pass.
++  std::shared_ptr<std::unordered_set<Name>> canCollect;
++
+   std::unique_ptr<Pass> create() override {
+     return std::make_unique<SpillPointers>();
+   }
+ 
++  std::shared_ptr<std::unordered_set<Name>> canCollectIn(Module* module) {
++    static std::mutex mutex;
++    static std::unordered_map<Module*,
++                              std::shared_ptr<std::unordered_set<Name>>>
++      found;
++    std::lock_guard<std::mutex> lock(mutex);
++    auto [entry, added] = found.try_emplace(module);
++    if (added) {
++      entry->second = findCanCollect(module);
++      if (getenv("SPILL_POINTERS_DEBUG")) {
++        std::cerr << "spill-pointers: "
++                  << (entry->second ? std::to_string(entry->second->size())
++                                    : std::string("all"))
++                  << " of " << module->functions.size()
++                  << " functions can collect and return, "
++                  << reach().any.size() << " at all, through "
++                  << reach().returningTypes.size() << " and "
++                  << reach().anyTypes.size() << " types of indirect call\n";
++      }
++    }
++    return entry->second;
++  }
++
++  // Calls that can collect, as found for the module: the functions, and the
++  // types of indirect call, that can reach garbage collection and return,
++  // and those that can reach it at all, which only matters at a call in a
++  // try, which catches a jump out of it, like setjmp's. A frame a jump
++  // unwinds through never resumes, so its locals needn't be where garbage
++  // collection reads them.
++  struct Reach {
++    std::unordered_set<Name> any, returning;
++    std::unordered_set<HeapType> anyTypes, returningTypes;
++  };
++  static Reach& reach() {
++    static Reach found;
++    return found;
++  }
++  static std::unordered_set<HeapType>& typesCanCollect() {
++    return reach().returningTypes;
++  }
++
++  // The calls in a function in a try, which resume when it catches.
++  static std::unordered_set<Expression*> callsInTry(Function* func) {
++    std::unordered_set<Expression*> found;
++    auto add = [&](Expression* body) {
++      for (auto* call : FindAll<Call>(body).list) {
++        found.insert(call);
++      }
++      for (auto* call : FindAll<CallIndirect>(body).list) {
++        found.insert(call);
++      }
++    };
++    for (auto* curr : FindAll<Try>(func->body).list) {
++      add(curr->body);
++    }
++    for (auto* curr : FindAll<TryTable>(func->body).list) {
++      add(curr->body);
++    }
++    return found;
++  }
++
++  // The calls in a function that never return, as unreachable follows them.
++  static std::unordered_set<Expression*> callsNotReturning(Function* func) {
++    std::unordered_set<Expression*> found;
++    for (auto* block : FindAll<Block>(func->body).list) {
++      auto& list = block->list;
++      for (Index i = 0; i + 1 < list.size(); i++) {
++        if (!list[i + 1]->is<Unreachable>()) {
++          continue;
++        }
++        auto* curr = list[i];
++        if (auto* drop = curr->dynCast<Drop>()) {
++          curr = drop->value;
++        } else if (auto* set = curr->dynCast<LocalSet>()) {
++          curr = set->value;
++        }
++        if (curr->is<Call>() || curr->is<CallIndirect>()) {
++          found.insert(curr);
++        }
++      }
++    }
++    return found;
++  }
++
++  // Functions reach garbage collection through what they call: directly, or
++  // indirectly through any function of the call's type in a table, or an
++  // import other than WASI's, which can call back in. Calls to the functions
++  // spill-pointers-cut names, separated by commas, are taken not to reach it,
++  // as when they only collect when they're called from one that does.
++  std::shared_ptr<std::unordered_set<Name>> findCanCollect(Module* module) {
++    auto& found = reach();
++    std::unordered_set<Name> roots;
++    std::stringstream names(getArgumentOrDefault("spill-pointers-gc", ""));
++    std::string name;
++    while (std::getline(names, name, ',')) {
++      if (module->getFunctionOrNull(Name(name))) {
++        roots.insert(Name(name));
++      }
++    }
++    if (roots.empty()) {
++      return nullptr;
++    }
++    std::unordered_set<Name> cut;
++    std::stringstream cutNames(getArgumentOrDefault("spill-pointers-cut", ""));
++    while (std::getline(cutNames, name, ',')) {
++      cut.insert(Name(name));
++    }
++    // Who calls each function, and each type indirectly: in a try, or
++    // returning, or not.
++    enum Kind { InTry, Returning, NotReturning };
++    std::unordered_map<Name, std::vector<std::pair<Name, Kind>>> callers;
++    std::unordered_map<HeapType, std::vector<std::pair<Name, Kind>>>
++      typeCallers;
++    for (auto& func : module->functions) {
++      if (func->imported()) {
++        if (func->module != "wasi_snapshot_preview1" &&
++            func->module != "canonical_abi") {
++          roots.insert(func->name);
++        }
++        continue;
++      }
++      if (!FindAll<CallRef>(func->body).list.empty()) {
++        roots.insert(func->name);
++      }
++      auto inTry = callsInTry(func.get());
++      auto notReturning = callsNotReturning(func.get());
++      auto kind = [&](Expression* call) {
++        return inTry.contains(call)          ? InTry
++               : notReturning.contains(call) ? NotReturning
++                                             : Returning;
++      };
++      for (auto* call : FindAll<CallIndirect>(func->body).list) {
++        typeCallers[call->heapType].push_back({func->name, kind(call)});
++      }
++      for (auto* call : FindAll<Call>(func->body).list) {
++        if (!cut.contains(call->target)) {
++          callers[call->target].push_back({func->name, kind(call)});
++        }
++      }
++    }
++    std::unordered_map<Name, HeapType> tableTypes;
++    ElementUtils::iterAllElementFunctionNames(module, [&](Name name) {
++      tableTypes.emplace(name, module->getFunction(name)->type.getHeapType());
++    });
++    // Each function reached, from those that reach it, through the calls that
++    // count: all of them for any, and those that return, or are in a try of a
++    // function that reaches it at all, for returning.
++    std::unordered_map<Name, Name> via;
++    auto spread = [&](std::unordered_set<Name>& set,
++                      std::unordered_set<HeapType>& types,
++                      std::vector<Name> work,
++                      auto counts) {
++      while (!work.empty()) {
++        auto at = work.back();
++        work.pop_back();
++        std::vector<std::pair<Name, Kind>> reached = callers[at];
++        auto table = tableTypes.find(at);
++        if (table != tableTypes.end() && types.insert(table->second).second) {
++          auto& more = typeCallers[table->second];
++          reached.insert(reached.end(), more.begin(), more.end());
++        }
++        for (auto [caller, kind] : reached) {
++          if (counts(kind) && set.insert(caller).second) {
++            via[caller] = at;
++            work.push_back(caller);
++          }
++        }
++      }
++    };
++    found.any = roots;
++    spread(found.any,
++           found.anyTypes,
++           {roots.begin(), roots.end()},
++           [](Kind) { return true; });
++    found.returning = roots;
++    std::vector<Name> work(roots.begin(), roots.end());
++    // A call in a try to a function that can reach it at all, or of a type
++    // that can, returns to its caller after it collects.
++    for (auto& [callee, list] : callers) {
++      if (found.any.contains(callee)) {
++        for (auto [caller, kind] : list) {
++          if (kind == InTry && found.returning.insert(caller).second) {
++            work.push_back(caller);
++          }
++        }
++      }
++    }
++    for (auto& [type, list] : typeCallers) {
++      if (found.anyTypes.contains(type)) {
++        for (auto [caller, kind] : list) {
++          if (kind == InTry && found.returning.insert(caller).second) {
++            work.push_back(caller);
++          }
++        }
++      }
++    }
++    via.clear();
++    spread(found.returning,
++           found.returningTypes,
++           work,
++           [](Kind kind) { return kind == Returning; });
++    // SPILL_POINTERS_WHY, functions separated by commas, says how each can.
++    if (auto* why = getenv("SPILL_POINTERS_WHY")) {
++      std::stringstream asked(why);
++      while (std::getline(asked, name, ',')) {
++        std::cerr << name;
++        for (Name at(name); via.contains(at); at = via[at]) {
++          std::cerr << " <- " << via[at];
++        }
++        std::cerr << (found.returning.contains(Name(name)) ? "\n"
++                                                           : " (can't)\n");
++      }
++    }
++    return std::make_shared<std::unordered_set<Name>>(found.returning);
++  }
++
++  // The calls in the function being walked that are in a try.
++  std::unordered_set<Expression*> inTry;
++
+   // a mapping of the pointers to all the spillable things. We need to know
+   // how to replace them, and as we spill we may modify them. This map
+   // gives us, for an Expression** seen during the walk (and placed in the
+@@ -63,12 +308,26 @@
+     actualPointers[pointer] = pointer;
+   }
+ 
+-  void visitCall(Call* curr) { visitSpillable(curr); }
+-  void visitCallIndirect(CallIndirect* curr) { visitSpillable(curr); }
++  void visitCall(Call* curr) {
++    if (canCollect && !canCollect->contains(curr->target) &&
++        !(inTry.contains(curr) && reach().any.contains(curr->target))) {
++      return;
++    }
++    visitSpillable(curr);
++  }
++  void visitCallIndirect(CallIndirect* curr) {
++    if (canCollect && !reach().returningTypes.contains(curr->heapType) &&
++        !(inTry.contains(curr) && reach().anyTypes.contains(curr->heapType))) {
++      return;
++    }
++    visitSpillable(curr);
++  }
+ 
+   // main entry point
+ 
+   void doWalkFunction(Function* func) {
++    canCollect = canCollectIn(getModule());
++    inTry = callsInTry(func);
+     Super::doWalkFunction(func);
+     spillPointers();
+   }
+@@ -83,9 +342,10 @@
+ 
+     // we only care about possible pointers
+     auto* func = getFunction();
++    auto notPointers = findNotPointers(func);
+     PointerMap pointerMap;
+     for (Index i = 0; i < func->getNumLocals(); i++) {
+-      if (func->getLocalType(i) == pointerType) {
++      if (func->getLocalType(i) == pointerType && !notPointers.contains(i)) {
+         auto offset = pointerMap.size() * pointerType.getByteSize();
+         pointerMap[i] = offset;
+       }
+@@ -109,8 +369,8 @@
+       if (lastCall == Index(-1)) {
+         continue; // nothing to see here
+       }
+-      // scan through the block, spilling around the calls
+-      // TODO: we can filter on pointerMap everywhere
++      // what's live at each call, scanning back through the block
++      std::unordered_map<Index, std::vector<Index>> liveAtCall;
+       SetOfLocals live = liveness.end;
+       for (int i = int(actions.size()) - 1; i >= 0; i--) {
+         auto& action = actions[i];
+@@ -119,9 +379,26 @@
+         } else if (action.isSet()) {
+           live.erase(action.index);
+         } else if (action.isOther()) {
+-          std::vector<Index> toSpill;
+           for (auto index : live) {
+             if (pointerMap.contains(index)) {
++              liveAtCall[i].push_back(index);
++            }
++          }
++        }
++      }
++      // then forward, spilling at each call what isn't already where it's
++      // spilled, unchanged since an earlier call in the block
++      std::unordered_set<Index> spilledUnchanged;
++      for (Index i = 0; i < actions.size(); i++) {
++        auto& action = actions[i];
++        if (action.isGet()) {
++          continue;
++        } else if (action.isSet()) {
++          spilledUnchanged.erase(action.index);
++        } else if (action.isOther()) {
++          std::vector<Index> toSpill;
++          for (auto index : liveAtCall[i]) {
++            if (spilledUnchanged.insert(index).second) {
+               toSpill.push_back(index);
+             }
+           }
+@@ -153,6 +430,72 @@
+     }
+   }
+ 
++  // The locals that can't be pointers into the heap, assuming each can't
++  // until it's set to something that can be.
++  std::unordered_set<Index> findNotPointers(Function* func) {
++    std::unordered_set<Index> notPointers;
++    for (Index i = func->getNumParams(); i < func->getNumLocals(); i++) {
++      notPointers.insert(i);
++    }
++    auto sets = FindAll<LocalSet>(func->body).list;
++    bool changed = true;
++    while (changed) {
++      changed = false;
++      for (auto* set : sets) {
++        if (notPointers.contains(set->index) &&
++            !isNotPointer(set->value, notPointers)) {
++          notPointers.erase(set->index);
++          changed = true;
++        }
++      }
++    }
++    return notPointers;
++  }
++
++  static bool isSmall(Expression* curr) {
++    auto* c = curr->dynCast<Const>();
++    return c && c->type == Type::i32 && c->value.geti32() >= 0 &&
++           c->value.geti32() < 65536;
++  }
++
++  bool isNotPointer(Expression* curr,
++                    const std::unordered_set<Index>& notPointers) {
++    if (curr->is<Const>()) {
++      return true;
++    }
++    if (auto* get = curr->dynCast<LocalGet>()) {
++      return notPointers.contains(get->index);
++    }
++    if (auto* tee = curr->dynCast<LocalSet>()) {
++      return isNotPointer(tee->value, notPointers);
++    }
++    if (auto* load = curr->dynCast<Load>()) {
++      return load->bytes < 4 && !load->signed_;
++    }
++    if (auto* unary = curr->dynCast<Unary>()) {
++      return unary->isRelational() || unary->op == ClzInt32 ||
++             unary->op == CtzInt32 || unary->op == PopcntInt32;
++    }
++    if (auto* binary = curr->dynCast<Binary>()) {
++      if (binary->isRelational()) {
++        return true;
++      }
++      if (binary->op == AndInt32) {
++        return isSmall(binary->left) || isSmall(binary->right);
++      }
++      if (binary->op == ShrUInt32) {
++        auto* c = binary->right->dynCast<Const>();
++        return c && (c->value.geti32() & 31) >= 16;
++      }
++      return false;
++    }
++    if (auto* select = curr->dynCast<Select>()) {
++      return isNotPointer(select->ifTrue, notPointers) &&
++             isNotPointer(select->ifFalse, notPointers);
++    }
++    return false;
++  }
++
+   void spillPointersAroundCall(Expression** origin,
+                                std::vector<Index>& toSpill,
+                                Index spillLocal,

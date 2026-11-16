@@ -46,6 +46,21 @@ Spilling's cost is in Ruby's C, not its VM: without `--spill-pointers`, [bench/i
 
 But WebAssembly's memory never shrinks, so it stays as big as the heaviest request made it, 534 MB after the sales nodes, from 313, a Fiber left suspended, like an `Enumerator` part way through `next`, stops collection for good, and the jumps suite's `GC.stress` cases no longer collect at all.
 
+## Collecting only at interrupt checks
+
+[ruby-4.0-jspi-safepoint-gc.patch](ruby-4.0-jspi-safepoint-gc.patch) keeps memory bounded, collecting at the next interrupt check after Ruby wants to, rather than between requests, and [binaryen-131-safepoint.patch](binaryen-131-safepoint.patch)'s `--spill-pointers` spills only at calls that can reach that and return, as a frame a jump unwinds through never resumes. Under `GC.stress`, [bench/check.rb](bench/check.rb), [bench/enumerators.rb](bench/enumerators.rb) and [bench/fibers.rb](bench/fibers.rb) give native Ruby's answers, it collects as often as the spilled module, and its heap's as big. But 5,915 of 7,909 functions can still reach it, through paths Raindown never takes but C can: allocating runs garbage collection's event hooks, which can call a trace proc, raising runs Ruby, and an indirect call reaches every function of its type, like `vfprintf`'s write, which is a cfunc's. So it's 1.49 MB with gzip, rather than 1.55 spilled and 1.21 without, and in [bench/normal.rb](bench/normal.rb), in ms, collecting as it goes, but without spilling, which collects between rounds:
+
+| Workload                 | Spilled | At interrupt checks | Without spilling |
+| ------------------------ | ------- | ------------------- | ---------------- |
+| The sales node           | 92      | 61–64               | 52–55            |
+| 300k objects allocated   | 164–177 | 165–166             | 96               |
+| `Array#each` 200k        | 24–25   | 22–23               | 18               |
+| `Hash[str]` 200k         | 43–48   | 44                  | 36–37            |
+| `Hash build str` 100×1k  | 42–44   | 41                  | 34               |
+| All of it                | 10.6–11.3 s | 10.3–10.5 s     | 8.6–8.7 s        |
+
+The sales node gains most of the way, as marking and sweeping no longer spill, but loops and allocating hardly at all, as nearly everything they call can still raise or call Ruby. Only taking out those paths, each with a guarantee they're never taken, would spill less.
+
 ## Running it
 
 `bench/bench.rb` reads `bench/sales.csv`, the benchmarks' year of orders, which [raindown-benchmarks](https://github.com/rainpour/raindown-benchmarks)' `Project.copy` writes to its project's `data/sales.csv`.
