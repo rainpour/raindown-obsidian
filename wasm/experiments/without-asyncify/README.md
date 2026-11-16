@@ -61,6 +61,22 @@ But WebAssembly's memory never shrinks, so it stays as big as the heaviest reque
 
 The sales node gains most of the way, as marking and sweeping no longer spill, but loops and allocating hardly at all, as nearly everything they call can still raise or call Ruby. Only taking out those paths, each with a guarantee they're never taken, would spill less.
 
+## Between requests or at interrupt checks, in the plugin
+
+Each built into `main.js`, with its smoke test and jumps suite passing, and timed with [notes.js](notes.js), in Node 26, against the spilled module, in ms, on raindown-benchmarks' vault of a year of 2,000 orders, with `work_rb.md` its note of ten sales nodes, and that note again on 20,000:
+
+| What                                    | Spilled   | Between requests | At interrupt checks |
+| --------------------------------------- | --------- | ---------------- | ------------------- |
+| `main.js`                               | 6.40 MB   | 5.99 MB          | 6.31 MB             |
+| Raindown started                        | 472–547   | 411–423          | 421–469             |
+| Ten sales nodes, 2,000 orders           | 102–119   | 78–80            | 87–95               |
+| The benchmarks' vault, all of it        | 2838–2931 | 2129–2147        | 2299–2431           |
+| The test vault, all of it               | 3925–4088 | 3383–3482        | 3590–3839           |
+| Ten sales nodes, 20,000 orders          | 843–933   | 697–728, then 72 collecting | 821–1048 |
+| The process's peak memory, 20,000 orders | 288–335 MB | 432–480 MB    | 291–357 MB          |
+
+Collecting between requests is 15 to 25% faster throughout, but its memory grows with the heaviest request, about 200 MB more for 20,000 orders, and stays. Collecting at interrupt checks keeps memory as the spilled module's, but is 5 to 15% faster on notes of a size a note's data is, and no faster on the heavier one.
+
 ## Running it
 
 `bench/bench.rb` reads `bench/sales.csv`, the benchmarks' year of orders, which [raindown-benchmarks](https://github.com/rainpour/raindown-benchmarks)' `Project.copy` writes to its project's `data/sales.csv`.
