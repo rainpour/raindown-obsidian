@@ -1,0 +1,85 @@
+diff --git a/scripts/ruby_wasm.rb b/scripts/ruby_wasm.rb
+index d1da650..c085b7e 100644
+--- a/scripts/ruby_wasm.rb
++++ b/scripts/ruby_wasm.rb
+@@ -79,7 +79,7 @@ module WithoutAsyncify
+     args = super.filter_map do |arg|
+       case arg
+       when /\ACFLAGS=/, /\ALDFLAGS=/ then "#{arg} #{EH}"
+-      when /\Acppflags=/ then "#{arg} -DRB_WASM_EH"
++      when /\Acppflags=/ then "#{arg} -DRB_WASM_EH -DRB_WASM_IDLE_GC"
+       when /\Awasmoptflags=/ then nil
+       else arg
+       end
+diff --git a/src/worker.js b/src/worker.js
+index 70d67ed..26f283f 100644
+--- a/src/worker.js
++++ b/src/worker.js
+@@ -22,6 +22,11 @@ let vm;
+ // WebAssembly.promising, which it waits for, rather than evalAsync.
+ let jspi = false;
+ let jspiEval;
++// Ruby's collection between requests, for the module without Asyncify, which only collects there, and how long the
++// last one took, with its memory's size, which each answer gives.
++let collect;
++let rubyMemory;
++const collected = { count: 0, ms: 0 };
+ // The vault's name, which its cache is kept under, as every vault's at /vault.
+ let vaultName = '';
+ // The data each file had when it was last sent or written, to find those Raindown's written since.
+@@ -52,6 +57,8 @@ async function answer(data) {
+     if (data.type === 'rewrite' || data.type === 'render') self.postMessage({ id: data.id, ...await rewrite(data) });
+   } catch (error) {
+     self.postMessage({ id: data.id, error: error.message });
++  } finally {
++    collectGarbage();
+   }
+ }
+ 
+@@ -89,6 +96,8 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
+     exported.fiberStart = WebAssembly.promising(instance.exports.rb_wasm_jspi_fiber_start);
+     jspiEval = WebAssembly.promising(instance.exports.rb_wasm_jspi_eval);
+     instance.exports.rb_wasm_jspi_define();
++    collect = instance.exports.rb_wasm_jspi_gc;
++    rubyMemory = instance.exports.memory;
+   }
+   mark('rubyStarted');
+   // A vault's .obsidian folder is how Raindown knows it's one, reading a table's path from its top.
+@@ -138,7 +147,7 @@ async function rewrite({ type, path, markdown, bare, execute }) {
+   const rubySteps = Object.fromEntries(Object.entries(timings).map(([step, at]) => [step, requested + at]));
+   const written = writtenFiles(folderAt(['vault']), '');
+   return {
+-    ...answer, written,
++    ...answer, written, collected: { ...collected, memoryMB: rubyMemory && rubyMemory.buffer.byteLength / 2 ** 20 },
+     timings: { requested, ...rubySteps, ruby, filesCollected: performance.now() - began }
+   };
+ }
+@@ -224,6 +233,15 @@ class JS::PromiseScheduler
+ end
+ `;
+ 
++// Garbage collected between requests, with no Ruby on the stack, where the module without Asyncify can, if Ruby wanted
++// to while it ran.
++function collectGarbage() {
++  if (!collect) return;
++
++  const began = performance.now();
++  if (collect()) Object.assign(collected, { count: collected.count + 1, ms: performance.now() - began });
++}
++
+ // Ruby's value for code that can wait for JavaScript: through rb_wasm_jspi_eval without Asyncify, or evalAsync.
+ async function evalWaiting(code) {
+   if (!jspi) return vm.evalAsync(code);
+diff --git a/wasm/patches/jspi/ruby-4.0-jspi.patch b/wasm/patches/jspi/ruby-4.0-jspi.patch
+index 31887ea..e8b355d 100644
+--- a/wasm/patches/jspi/ruby-4.0-jspi.patch
++++ b/wasm/patches/jspi/ruby-4.0-jspi.patch
+@@ -29,7 +29,7 @@ with RB_WASM_EH, and with -mllvm -wasm-enable-sjlj -mexception-handling and -lse
+  esac
+  	done
+ -		POSTLINK="\$(WASMOPT) --asyncify \$(wasmoptflags) -o \$@ \$@${POSTLINK:+; $POSTLINK}"
+-+		POSTLINK="\$(WASMOPT) --flatten --coalesce-locals --spill-pointers \$(wasmoptflags) -o \$@ \$@${POSTLINK:+ && $POSTLINK}"
+++		POSTLINK="\$(WASMOPT) --flatten --coalesce-locals \$(wasmoptflags) -o \$@ \$@${POSTLINK:+ && $POSTLINK}"
+  		# wasi-libc's sys/socket.h is not compatible with -std=gnu99,
+  		# so re-declare shutdown in include/ruby/missing.h
+  		ac_cv_func_shutdown=no

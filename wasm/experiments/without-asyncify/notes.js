@@ -2,7 +2,8 @@
 
 // Each note's median write-back, in milliseconds, by a main.js's engine and worker, run in Node as the smoke test runs
 // it, over a vault, as JSON, with how long Raindown took to start, and whether with JSPI, which Node 26 has, or
-// Asyncify, with RAINDOWN_WITHOUT_JSPI, or why a note wasn't written back.
+// Asyncify, with RAINDOWN_WITHOUT_JSPI, or why a note wasn't written back, with how long it all took, the process's
+// peak memory, and, with idle-gc-plugin.diff's worker, its last collection between requests after each note.
 //   [RAINDOWN_WITHOUT_JSPI=1] node notes.js main.js VAULT [NOTE.md ...]
 const fs = require('node:fs');
 const path = require('node:path');
@@ -79,6 +80,7 @@ function vaultApp(root) {
 const withNewProps = (markdown) => markdown.replace(/\bn(: |=)\d+/g, (_, separator) => `n${separator}${Math.floor(Math.random() * 100000)}`);
 
 // Each note's median write-back in milliseconds, or why it couldn't be written back.
+const collected = {};
 async function median(engine, note) {
   const markdown = fs.readFileSync(path.join(folder, note), 'utf8');
   const times = [];
@@ -86,6 +88,7 @@ async function median(engine, note) {
     const started = performance.now();
     const answer = await engine.rewrite({ path: note, markdown: withNewProps(markdown), bare: false }, { timeout: 120000 });
     times.push(performance.now() - started);
+    if (answer.collected) collected[note] = answer.collected;
     if (answer.error) return answer.error.slice(0, 60);
     if (/WARNING|Couldn/.test(answer.output) || answer.warnings?.length) return `warned: ${(answer.warnings || []).join(" ").slice(0, 120)} ${answer.output.slice(0, 120)}`;
   }
@@ -109,7 +112,7 @@ async function bench() {
     engine.stop();
     console.debug = log;
   }
-  console.log(JSON.stringify({ jspi: engine.jspi, started: engine.timings, times }));
+  console.log(JSON.stringify({ jspi: engine.jspi, started: engine.timings, times, collected, wallMs: Math.round(performance.now()), maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024) }));
 }
 
 bench().catch((error) => {

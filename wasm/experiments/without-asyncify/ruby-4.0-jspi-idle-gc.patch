@@ -1,0 +1,96 @@
+Ruby without Asyncify collecting garbage only between requests, an experiment: the configure no longer runs
+--spill-pointers, so garbage collection can't see what Ruby's C holds in WebAssembly's locals, and only collects in
+rb_wasm_jspi_gc, which the worker calls after each request, with no Ruby on the stack. Built with RB_WASM_IDLE_GC:
+
+1. gc_start refuses anywhere else, as GC.disable does, GC.start too, so the heap grows during a request, and notes
+   that Ruby wanted to collect, in gc/default/default.c.
+2. rb_wasm_jspi_gc collects, a minor or major collection as Ruby wanted, marking and sweeping at once, but not while a
+   Fiber's suspended, whose stack might hold an object only in a local, in gc.c and cont.c.
+
+--- a/cont.c
++++ b/cont.c
+@@ -967,6 +967,11 @@
+ #endif
+ }
+ 
++#ifdef RB_WASM_IDLE_GC
++/* Fibers suspended, whose stacks hold locals garbage collection can't see, so rb_wasm_jspi_gc waits for none. */
++int rb_wasm_fibers_suspended;
++#endif
++
+ inline static void
+ fiber_status_set(rb_fiber_t *fiber, enum fiber_status s)
+ {
+@@ -974,6 +979,9 @@
+     VM_ASSERT(!FIBER_TERMINATED_P(fiber));
+     VM_ASSERT(fiber->status != s);
+     fiber_verify(fiber);
++#ifdef RB_WASM_IDLE_GC
++    rb_wasm_fibers_suspended += (s == FIBER_SUSPENDED) - FIBER_SUSPENDED_P(fiber);
++#endif
+     fiber->status = s;
+ }
+ 
+--- a/gc/default/default.c
++++ b/gc/default/default.c
+@@ -6295,10 +6295,22 @@
+     }
+ }
+ 
++#ifdef RB_WASM_IDLE_GC
++/*
++  Without spilled locals, garbage collection can't see what Ruby's C holds in WebAssembly's locals, so it only collects
++  in rb_wasm_jspi_gc, which JavaScript calls between requests, with no Ruby on the stack. Anywhere else it's refused, as
++  with GC.disable, so the heap grows, and rb_wasm_gc_wanted says it would have collected.
++*/
++int rb_wasm_gc_idle, rb_wasm_gc_wanted;
++# define wasm_gc_refused() (!rb_wasm_gc_idle && (rb_wasm_gc_wanted = 1))
++#else
++# define wasm_gc_refused() 0
++#endif
++
+ static int
+ ready_to_gc(rb_objspace_t *objspace)
+ {
+-    if (dont_gc_val() || during_gc) {
++    if (dont_gc_val() || during_gc || wasm_gc_refused()) {
+         for (int i = 0; i < HEAP_COUNT; i++) {
+             rb_heap_t *heap = &heaps[i];
+             heap_ready_to_gc(objspace, heap);
+@@ -6408,7 +6420,7 @@
+     unsigned int do_full_mark = !!(reason & GPR_FLAG_FULL_MARK);
+ 
+     if (!rb_darray_size(objspace->heap_pages.sorted)) return TRUE; /* heap is not ready */
+-    if (!(reason & GPR_FLAG_METHOD) && !ready_to_gc(objspace)) return TRUE; /* GC is not allowed */
++    if ((!(reason & GPR_FLAG_METHOD) || wasm_gc_refused()) && !ready_to_gc(objspace)) return TRUE; /* GC is not allowed */
+ 
+     GC_ASSERT(gc_mode(objspace) == gc_mode_none, "gc_mode is %s\n", gc_mode_name(gc_mode(objspace)));
+     GC_ASSERT(!is_lazy_sweeping(objspace));
+--- a/gc.c
++++ b/gc.c
+@@ -5636,3 +5636,25 @@
+     errno = 0;
+ #endif
+ }
++
++#ifdef RB_WASM_IDLE_GC
++extern int rb_wasm_fibers_suspended;
++
++/*
++  Collects, as Ruby wanted to while it ran, from JavaScript between requests, so no Ruby's on the stack to hold an
++  object only in WebAssembly's locals, unless a Fiber's suspended, whose stack might. Gives whether it collected.
++*/
++__attribute__((export_name("rb_wasm_jspi_gc")))
++int
++rb_wasm_jspi_gc(void)
++{
++    if (!rb_wasm_gc_wanted || rb_wasm_fibers_suspended) return 0;
++
++    rb_wasm_gc_idle = 1;
++    rb_wasm_gc_wanted = 0;
++    garbage_collect(rb_gc_get_objspace(), GPR_FLAG_IMMEDIATE_MARK | GPR_FLAG_IMMEDIATE_SWEEP | GPR_FLAG_METHOD);
++    rb_wasm_gc_idle = 0;
++    gc_finalize_deferred(rb_gc_get_objspace());
++    return 1;
++}
++#endif

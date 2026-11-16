@@ -33,6 +33,19 @@ Switching Fibers and calling blocks from C cost little, as [bench/switches.rb](b
 - wasi-vfs can't compile exception handling, so neither module is packed with Ruby's files, which `main.js` has, and the worker gives Ruby in its folders.
 - Fibers only switch in Ruby that JavaScript called through `WebAssembly.promising`, so the worker answers through `rb_wasm_jspi_eval`, in a Fiber, as `evalAsync` does, so too deep a stack raises `SystemStackError` before JSPI's stack, of 984 KB, overflows. [bench/fibers.rb](bench/fibers.rb) checks they switch as native Ruby's do.
 
+## Collecting only between requests
+
+Spilling's cost is in Ruby's C, not its VM: without `--spill-pointers`, [bench/idle.rb](bench/idle.rb), collecting between rounds, loops over arrays and hashes take 15 to 30% less time, allocating 300,000 objects 99 ms rather than 120, and garbage collection less than half as long, while a `while` loop and `fib` take the same. [ruby-4.0-jspi-idle-gc.patch](ruby-4.0-jspi-idle-gc.patch), with [idle-gc-plugin.diff](idle-gc-plugin.diff)'s build and worker, builds the module without it, and collects only in `rb_wasm_jspi_gc`, which the worker calls after each answer, with no Ruby on the stack, and not while a Fiber's suspended. It writes back the smoke test's notes as native Raindown does, and passes the jumps suite. With [notes.js](notes.js), in Node 26:
+
+| What                              | Spilled     | Collecting between requests |
+| --------------------------------- | ----------- | --------------------------- |
+| A note of ten sales nodes         | 840–901 ms  | 619–686 ms, then 70 ms collecting |
+| Raindown started                  | 470–643 ms  | 395–409 ms                  |
+| The module, and `main.js`         | 7.6, 6.40 MB | 4.8, 5.99 MB               |
+| The process's peak memory         | 261 MB      | 419 MB                      |
+
+But WebAssembly's memory never shrinks, so it stays as big as the heaviest request made it, 534 MB after the sales nodes, from 313, a Fiber left suspended, like an `Enumerator` part way through `next`, stops collection for good, and the jumps suite's `GC.stress` cases no longer collect at all.
+
 ## Running it
 
 `bench/bench.rb` reads `bench/sales.csv`, the benchmarks' year of orders, which [raindown-benchmarks](https://github.com/rainpour/raindown-benchmarks)' `Project.copy` writes to its project's `data/sales.csv`.
