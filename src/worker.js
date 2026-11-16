@@ -57,7 +57,7 @@ async function answer(data) {
 
 // The module's compressed with gzip, in Z85, as main.js has it, which the browser decompresses, and the load path is
 // each gem's, as packed. Answers with how long each step took, in milliseconds from the start, as timings.
-async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, files, frontMatters = {}, vault = '' }) {
+async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, files, frontMatters = {}, vault = '' }) {
   const began = performance.now();
   const timings = {};
   const mark = (step) => { timings[step] = Math.round(performance.now() - began); };
@@ -70,11 +70,16 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
   const module = await compiled(decompressing);
   mark('compiled');
   root = new PreopenDirectory('/', new Map());
-  // Ruby's files, which main.js has, rather than its module, with the js gem's and a /bundle/setup.rb that finds them.
-  for (const [file, base64] of rootFiles || []) {
+  // Ruby's files, which main.js has, rather than its module, with the js gem's and a /bundle/setup.rb that finds them,
+  // one after another, compressed with gzip, in Z85, as the module is, by their paths and sizes.
+  const data = new Uint8Array(await new Response(new Blob([fromZ85(rootData, rootDataSize)]).stream()
+    .pipeThrough(new DecompressionStream('gzip'))).arrayBuffer());
+  let at = 0;
+  for (const [file, size] of rootFiles) {
     const parts = file.split('/');
-    folderAt(parts.slice(0, -1)).contents.set(parts.at(-1), new File(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0))));
+    folderAt(parts.slice(0, -1)).contents.set(parts.at(-1), new File(data.subarray(at, at += size)));
   }
+  mark('filesUnpacked');
   const wasi = new WASI([], [], [...[0, 1, 2].map(() => new OpenFile(new File([]))), root], { debug: false });
   const exported = {};
   const addToImports = (imports) => { if (jspi) imports.rb_wasm_jspi = jspiImports(exported); };

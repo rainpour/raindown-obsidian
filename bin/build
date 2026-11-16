@@ -52,6 +52,11 @@ MISE = mise_exec.freeze
 BUNDLED = [*MISE, 'bundle', 'exec'].freeze
 # rbwasm and the js gem, at RUBY_WASM_VERSION, for building ruby.wasm's module and packing Raindown into it.
 WASM_GEMS = { 'BUNDLE_GEMFILE' => File.join(ROOT, 'wasm', 'Gemfile') }.freeze
+# Its lockfile, as it was, which a build locks again for this computer alone, leaving out the others, so it's written
+# back after, and the modules are named by it.
+WASM_LOCKFILE = File.join(ROOT, 'wasm', 'Gemfile.lock')
+WASM_LOCKED = File.read(WASM_LOCKFILE)
+at_exit { File.write(WASM_LOCKFILE, WASM_LOCKED) unless File.read(WASM_LOCKFILE) == WASM_LOCKED }
 
 # Z85, a base 85 with no quotes or backslashes, so it's a JavaScript string as it is, a fifteenth smaller than base64.
 # The bytes are padded to a multiple of 4 with zeros, which the worker cuts off.
@@ -89,7 +94,7 @@ def ruby_module(jspi: false)
   return File.expand_path(given) if given
 
   patches = Dir.glob('wasm/patches/**/*.patch', base: ROOT).sort
-  inputs = [*%w[scripts/ruby_wasm.rb wasm/Gemfile.lock], *patches].map { File.read(File.join(ROOT, it)) }.join
+  inputs = [File.read(File.join(ROOT, 'scripts', 'ruby_wasm.rb')), WASM_LOCKED, *patches.map { File.read(File.join(ROOT, it)) }].join
   path = File.join(BUILD, 'module', "ruby-#{'jspi-' if jspi}#{Digest::SHA256.hexdigest(inputs)[0, 12]}.wasm")
   return path if File.exist?(path)
 
@@ -210,9 +215,10 @@ end
 copy(File.join(Gem::Specification.find_by_name('js').full_gem_path, 'lib'), File.join(STAGE, 'bundle', 'js', 'lib'))
 File.write(File.join(STAGE, 'bundle', 'setup.rb'), "$LOAD_PATH.unshift('/bundle/js/lib')\n")
 folders << 'bundle'
-root_files = folders.flat_map { |folder| Dir.glob("#{folder}/**/*", base: STAGE) }
-                    .select { File.file?(File.join(STAGE, it)) }
-                    .map { [it, [File.binread(File.join(STAGE, it))].pack('m0')] }
+# They're one after another, compressed together, like the modules, with each one's path and size.
+root_files = folders.flat_map { |folder| Dir.glob("#{folder}/**/*", base: STAGE) }.select { File.file?(File.join(STAGE, it)) }
+root_data = File.join(BUILD, 'root.bin')
+File.binwrite(root_data, root_files.map { File.binread(File.join(STAGE, it)) }.join)
 wasm = File.join(BUILD, 'raindown.wasm')
 FileUtils.cp(ruby_module, wasm)
 wasm_jspi = File.join(BUILD, 'raindown-jspi.wasm')
@@ -228,6 +234,7 @@ abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" 
 worker = [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
 compressed = gzipped(wasm)
 compressed_jspi = gzipped(wasm_jspi)
+compressed_root = gzipped(root_data)
 runtime = {
   wasm: z85(compressed),
   wasmSize: compressed.bytesize,
@@ -235,7 +242,9 @@ runtime = {
   wasmJspiSize: compressed_jspi.bytesize,
   worker:,
   loadPaths: load_paths,
-  rootFiles: root_files
+  rootFiles: root_files.map { [it, File.size(File.join(STAGE, it))] },
+  rootData: z85(compressed_root),
+  rootDataSize: compressed_root.bytesize
 }
 sources = {
   './runtime' => "module.exports = #{JSON.generate(runtime)};",
