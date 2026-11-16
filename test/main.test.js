@@ -276,18 +276,28 @@ test('starts Raindown again when a file in a .raindown folder changes, so its no
   assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, true, false]);
 });
 
-test("starts Raindown again once its memory's grown past 512 MB, when nothing's waiting for it", async () => {
+test("starts Raindown again after a pause once its memory's past 512 MB, or once nothing's waiting past 1 GB", async () => {
   const { vault } = fakeVault({ 'note.md': '# A' });
   let memory = 300 * 2 ** 20;
   const Worker = fakeWorker(({ type }) => (type === 'start' ? { ready: true } : { output: '', warnings: [], written: [], memory }));
-  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker });
+  const engine = new RaindownEngine({ vault }, { runtime: fakeRuntime, Worker, idleRestart: 30 });
   const rewrite = () => engine.rewrite({ path: 'note.md', markdown: '' }, { timeout: 1000 });
+  const terminated = () => Worker.made.map((worker) => Boolean(worker.terminated));
 
   await rewrite();
   memory = 600 * 2 ** 20;
+  await rewrite();
+  await rewrite();
+  assert.deepEqual(terminated(), [false]);
+  await new Promise((resolve) => { setTimeout(resolve, 60); });
+  await engine.starting;
+  assert.deepEqual(terminated(), [true, false]);
+
+  memory = 1100 * 2 ** 20;
   await Promise.all([rewrite(), rewrite()]);
   await engine.starting;
-  assert.deepEqual(Worker.made.map(({ terminated }) => Boolean(terminated)), [true, false]);
+  assert.deepEqual(terminated(), [true, true, false]);
+  engine.stop();
 });
 
 test("stops Raindown when it doesn't answer in time, and starts it again for the next note", async () => {
