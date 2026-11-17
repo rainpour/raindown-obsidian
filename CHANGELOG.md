@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A component's bare directive, like `BookCard: title: Dune`, works in every note, without the Bare syntax setting, and is highlighted, as Raindown's own, like `toc:`, still need it
 - Raindown runs inside the plugin, so there's nothing else to install
 - Endpoints are sent by Obsidian, rather than curl
 - JavaScript components run inside the plugin, rather than Node.js
@@ -44,6 +45,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Raindown command setting, and Find Raindown
 
 ### Fixed
+
+- Markdown Components write back, rather than failing to load Commonmarker, which the plugin hasn't got, with Raindown's next release
 
 - Deleting a row deletes its `|+` rows too
 - Enter on a table's delimiter row no longer splits the table

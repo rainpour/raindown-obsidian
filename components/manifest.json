@@ -1,0 +1,9 @@
+{
+  "id": "components",
+  "name": "Components",
+  "minAppVersion": "1.4.0",
+  "description": "Reusable blocks for your notes, like templates that stay up to date: write a component once in Markdown, give it different values in each note, and edit it to update every note that uses it.",
+  "author": "Raindown",
+  "authorUrl": "https://raindown.dev",
+  "isDesktopOnly": false
+}

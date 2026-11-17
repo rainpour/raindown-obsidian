@@ -104,7 +104,10 @@ test('only starts Raindown for notes with directives', () => {
   assert.ok(RaindownPlugin.hasDirectives('---\nraindown: true\n---\n'));
   assert.ok(!RaindownPlugin.hasDirectives('# A\n\n<!-- a note -->\nJust text.\n'));
   assert.ok(!RaindownPlugin.hasDirectives('# A\n\ntoc:\n'));
-  assert.ok(RaindownPlugin.hasDirectives('# A\n\ntoc:\n', { bareSyntax: true }));
+  assert.ok(RaindownPlugin.hasDirectives('# A\n\ntoc:\n', { bare: true }));
+  assert.ok(RaindownPlugin.hasDirectives("# A\n\nBookCard: title: 'Dune'\n", { components: ['BookCard'] }));
+  assert.ok(RaindownPlugin.hasDirectives('# A\n\n:BookCard\n', { components: ['BookCard'] }));
+  assert.ok(!RaindownPlugin.hasDirectives('# A\n\nNote: call Sam\n', { components: ['BookCard'] }));
 });
 
 test('writes back to the note, by its path in the vault, and not again for the save that makes', async () => {
@@ -366,6 +369,23 @@ test('writes back every note with directives, and says how many changed', async 
   await raindown.writeBackAll(RaindownPlugin.hasDirectives, { notify: true });
   assert.equal(notes['a.md'], '# A\n\n<!-- toc: -->\n- [A](#a)\n<!-- :toc -->\n');
   assert.equal(Notice.messages.at(-1), 'Wrote back 1 note');
+});
+
+test('writes back each note that uses a component when the component changes, after a pause', async () => {
+  const notes = { 'a.md': '<!-- Card: -->\n<!-- :Card -->\n', 'b.md': '<!-- toc: -->\n<!-- :toc -->\n', '.raindown/Card.md': '**{title}**\n' };
+  const { raindown, engine } = await plugin();
+  const files = Object.keys(notes).map((path) => ({ path, name: path.split('/').at(-1), extension: 'md' }));
+  Object.assign(raindown.app.vault, {
+    getMarkdownFiles: () => files,
+    cachedRead: async (file) => notes[file.path],
+    read: async (file) => notes[file.path],
+    process: async (file, change) => { notes[file.path] = change(notes[file.path]); }
+  });
+
+  raindown.componentChanged(files[2]);
+  raindown.componentChanged(files[0]);
+  await new Promise((resolve) => { setTimeout(resolve, 1100); });
+  assert.deepEqual(engine.asked.map(({ path }) => path), ['a.md']);
 });
 
 test("finds the line of Raindown's error, to underline it", () => {

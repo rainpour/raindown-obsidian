@@ -7,7 +7,9 @@
 const MIRRORED = /\.(?:md|rd|raindown|markdown|csv|tsv|json|ya?ml|rb|rbx|js|mjs|txt)$/i;
 const SKIPPED_FOLDERS = new Set(['.git', '.trash', 'node_modules']);
 const LARGEST_FILE = 4 * 1024 * 1024;
-const NODES_FOLDER = '.raindown';
+const EDITION = require('./edition');
+// The folder of a project's components, which, changed, starts Raindown again: .raindown, or Components'.
+const NODES_FOLDER = EDITION.folder;
 // How long Raindown has to start and give its first answer, as Ruby starts and loads Raindown first.
 const START_TIMEOUT = 60000;
 // Ruby's memory, past which it's started again once it's had no request for IDLE_RESTART, or past MEMORY_MOST, once
@@ -76,7 +78,7 @@ class RaindownEngine {
       this.worker.onmessage = ({ data }) => this.receive(data);
       this.worker.onerror = (event) => this.fail(new Error(`Raindown stopped: ${event.message}`));
       const vault = this.app.vault.getName?.() ?? '';
-      const started = this.ask({ type: 'start', ...moduleRun({ wasm, wasmSize, wasmJspi, wasmJspiSize }), loadPaths, rootFiles, rootData, rootDataSize, vault }, START_TIMEOUT);
+      const started = this.ask({ type: 'start', ...moduleRun({ wasm, wasmSize, wasmJspi, wasmJspiSize }), loadPaths, rootFiles, rootData, rootDataSize, vault, edition: EDITION.name }, START_TIMEOUT);
       await Promise.race([new Promise((resolve) => { this.workerBegan = resolve; }), started]);
       const [files, nodes] = [[], new Map()];
       await this.readFolder('', files, nodes);

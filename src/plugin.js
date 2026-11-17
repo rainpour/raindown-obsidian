@@ -7,6 +7,7 @@ const {
   EditorSuggest, MarkdownRenderer, Notice, Platform, Plugin, PluginSettingTab, Setting, Vault, editorInfoField
 } = require('obsidian');
 const { RaindownEngine } = require('./engine');
+const EDITION = require('./edition');
 const {
   BLOCK_COMMENT, alignTables, carriedOnCell, cellToggleAt, directiveTokens, enteredCell, inFixedCell, inFormulaCell, offsetOf, orphanedRows, positionOf, tabbedCell, tableFiles, tableLines
 } = require('./editing');
@@ -31,7 +32,8 @@ const BARE_SYNTAX_WARNING = 'Make sure your files are version controlled or back
 // Notes listing others, which a note being added, renamed or removed changes.
 const LISTS = /(?:<!--\s*|<\{\s*|^ {0,3})list:/m;
 // Raindown's directives, for completing their names. A project's own nodes in .raindown/ are added to them.
-const BUILT_INS = ['chart', 'endpoint', 'for', 'if', 'list', 'schema', 'table', 'toc'];
+// What "New component" makes, in the Components folder: a property for each value it shows, with its default.
+const STARTER_COMPONENT = '---\ntitle: Hello\n---\n\n**{title}**\n';
 // A content directive in a comment, like <!-- toc: --> or <!-- Changelog: -->, or front matter allowing bare ones.
 // Saves of notes without them don't start Raindown.
 const DIRECTIVE = /<!--\s*[A-Za-z][\w:]*:|^raindown:\s*true\s*$/m;
@@ -70,8 +72,12 @@ function markSections(text, sections) {
 }
 
 // Takes the plugin's settings, so Bare syntax counts.
-function hasDirectives(markdown, { bareSyntax = false } = {}) {
-  return DIRECTIVE.test(markdown) || (bareSyntax && BARE_DIRECTIVE.test(markdown));
+// Or a component's bare directive, BookCard: or :BookCard, which works in every note, for one of components, by name.
+function hasDirectives(markdown, { bare = false, components = [] } = {}) {
+  if (DIRECTIVE.test(markdown) || (bare && BARE_DIRECTIVE.test(markdown))) return true;
+  if (!components.length) return false;
+
+  return new RegExp(String.raw`^ {0,3}:?(?:${components.join('|')})(?::|[ \t]|$)`, 'm').test(markdown);
 }
 
 // What Raindown wrote back is only applied to the note it was given, so typing since then is never lost.
@@ -287,7 +293,7 @@ function highlighting(plugin) {
     const builder = new RangeSetBuilder();
     const line = errorFor(view);
     const markdown = view.state.doc.toString();
-    const options = { bare: plugin.settings.bareSyntax };
+    const options = plugin.editingOptions();
     // Phones and tablets have no app to open a table's file with.
     const buttons = !Platform.isDesktopApp ? [] : tableFiles(markdown, options).map(({ at, data }) => ({
       from: at, to: at, decoration: Decoration.widget({ widget: new OpenFileWidget(data), side: 1 })
@@ -315,6 +321,7 @@ function highlighting(plugin) {
 
 // Carries a table's cell on onto a |+ row on Option or Alt and Enter, typed like any key, so the table's lined up.
 function carryOnCell(view) {
+  if (!EDITION.full) return false;
   const change = carriedOnCell(view.state.doc.toString(), view.state.selection.main.head);
   if (!change) return false;
 
@@ -359,7 +366,7 @@ function heldWriteBacks(plugin) {
     if (plugin.held.has(info.file.path)) return Decoration.set([hints.held.range(line.to)]);
     if (!/^\s*[|+]/.test(line.text)) return Decoration.none;
 
-    const toggle = cellToggleAt(view.state.doc.toString(), head, { bare: plugin.settings.bareSyntax });
+    const toggle = cellToggleAt(view.state.doc.toString(), head, plugin.editingOptions());
     return toggle ? Decoration.set([hints[toggle].range(line.to)]) : Decoration.none;
   };
 
@@ -399,7 +406,7 @@ class DirectiveSuggest extends EditorSuggest {
   }
 
   async getSuggestions(context) {
-    const names = [...BUILT_INS, ...await this.plugin.projectNodes(context.file)];
+    const names = [...EDITION.directives, ...await this.plugin.projectNodes(context.file)];
     const query = context.query.toLowerCase();
 
     return names.filter((name) => name.toLowerCase().startsWith(query));
@@ -417,6 +424,11 @@ class DirectiveSuggest extends EditorSuggest {
 
 class RaindownPlugin extends Plugin {
   async onload() {
+    // Raindown does all Components does, so with it on, Components stays off, rather than both writing back each note.
+    if (!EDITION.full && this.app.plugins?.enabledPlugins?.has('raindown')) {
+      new Notice('Components is off, as Raindown is on, which does all it does');
+      return;
+    }
     this.settings = { ...DEFAULT_SETTINGS, ...(await this.loadData()) };
     this.engine = new RaindownEngine(this.app);
     this.timers = new Map();
@@ -437,28 +449,17 @@ class RaindownPlugin extends Plugin {
       checkCallback: (checking) => this.withActiveNote(checking, (file) => this.writeBack(file, { notify: true }))
     });
     this.addCommand({
-      id: 'run-endpoints',
-      name: 'Run the endpoints in this note',
-      checkCallback: (checking) => this.withActiveNote(checking, (file) => this.writeBack(file, { execute: true, notify: true }))
-    });
-    this.addCommand({
       id: 'write-back-all', name: 'Write back all notes', callback: () => this.writeBackAll(hasDirectives, { notify: true })
     });
-    this.addCommand({
-      id: 'open-table-file',
-      name: "Open this table's file",
-      editorCheckCallback: (checking, editor, view) => {
-        const table = Platform.isDesktopApp && this.tableAtCursor(editor);
-        if (table && !checking) this.openTableFile(view.file, table.data);
-        return Boolean(table);
-      }
-    });
+    if (EDITION.full) this.addFullCommands();
+    else this.addCommand({ id: 'new-component', name: 'New component', callback: () => this.newComponent() });
     this.registerEvent(this.app.workspace.on('editor-change', (editor, info) => {
       if (info.file && !this.inFixedCell(editor)) this.scheduleWriteBack(info.file, typingDelay(editor));
     }));
     // Obsidian's saves of what's typed in a fixed column aren't written back, as typing there isn't.
     this.registerEvent(this.app.vault.on('modify', (file) => {
       this.engine.fileChanged(file.path);
+      this.componentChanged(file);
       const editor = this.editorFor(file);
       if (!editor || !this.inFixedCell(editor)) this.scheduleWriteBack(file);
     }));
@@ -466,8 +467,10 @@ class RaindownPlugin extends Plugin {
     this.errors = new Map();
     this.registerEditorExtension(highlighting(this));
     this.registerEditorExtension(heldWriteBacks(this));
-    this.registerEditorExtension(tableAlignment(this));
-    this.registerEditorExtension(rowDeletions());
+    if (EDITION.full) {
+      this.registerEditorExtension(tableAlignment(this));
+      this.registerEditorExtension(rowDeletions());
+    }
     this.registerEditorSuggest(new DirectiveSuggest(this.app, this));
     this.registerMarkdownPostProcessor((el, context) => this.renderSection(el, context));
     // Obsidian adds every file as it loads, so lists are only written back for notes added after that, and Raindown has
@@ -479,24 +482,58 @@ class RaindownPlugin extends Plugin {
         this.fileRemoved(file, oldPath);
         this.fileAdded(file);
       }));
+      this.readComponentNames();
       // Started now, so the first write-back doesn't wait for Raindown to load.
       if (this.settings.writeBack) this.engine.start().catch((error) => this.report(error.message, { notify: false }));
     });
   }
 
   onunload() {
-    this.timers.forEach((timer) => clearTimeout(timer));
+    this.timers?.forEach((timer) => clearTimeout(timer));
     clearTimeout(this.listsTimer);
-    this.engine.stop();
+    clearTimeout(this.componentTimer);
+    this.engine?.stop();
+  }
+
+  // Running a note's endpoints, and opening a table's file, which Components hasn't got.
+  addFullCommands() {
+    this.addCommand({
+      id: 'run-endpoints',
+      name: 'Run the endpoints in this note',
+      checkCallback: (checking) => this.withActiveNote(checking, (file) => this.writeBack(file, { execute: true, notify: true }))
+    });
+    this.addCommand({
+      id: 'open-table-file',
+      name: "Open this table's file",
+      editorCheckCallback: (checking, editor, view) => {
+        const table = Platform.isDesktopApp && this.tableAtCursor(editor);
+        if (table && !checking) this.openTableFile(view.file, table.data);
+        return Boolean(table);
+      }
+    });
+  }
+
+  // A component to fill in, in the Components folder, made from STARTER_COMPONENT, by the first free name, opened, with
+  // how to use it.
+  async newComponent() {
+    const { vault, workspace } = this.app;
+    if (!vault.getAbstractFileByPath(EDITION.folder)) await vault.createFolder(EDITION.folder);
+    let name = 'NewComponent';
+    for (let number = 2; vault.getAbstractFileByPath(`${EDITION.folder}/${name}.md`); number++) name = `NewComponent${number}`;
+    const file = await vault.create(`${EDITION.folder}/${name}.md`, STARTER_COMPONENT);
+    await workspace.getLeaf(true).openFile(file);
+    new Notice(`Rename it, then use it in a note on a line of its own, as ${name}: title: 'Hi'`);
   }
 
   // A file or folder added to the vault, which Raindown's sent, with each file in it, and the lists it changes.
   fileAdded(file) {
+    this.componentsFolderChanged(file.path);
     Vault.recurseChildren(file, (added) => this.engine.fileChanged(added.path));
     this.scheduleListsWriteBack(file);
   }
 
   fileRemoved(file, path) {
+    this.componentsFolderChanged(path);
     this.engine.fileRemoved(path);
     this.scheduleListsWriteBack(file);
   }
@@ -553,11 +590,40 @@ class RaindownPlugin extends Plugin {
     this.listsTimer = setTimeout(() => this.writeBackAll((markdown) => LISTS.test(markdown)), DELAY);
   }
 
+  // How Raindown's directives are read as a note's typed: bare everywhere with bare syntax, and the project's components'
+  // bare everywhere, by their names, which componentNames keeps.
+  editingOptions() {
+    return { bare: this.settings.bareSyntax, components: this.componentNames ?? [] };
+  }
+
+  // The names of the vault's components, read again when its folder changes, so their bare directives are known, or
+  // those it had, when they can't be read.
+  async readComponentNames() {
+    this.componentNames = await this.projectNodes(null).catch(() => this.componentNames);
+  }
+
+  // A file added, removed or renamed in the components' folder, which changes which components there are.
+  componentsFolderChanged(path) {
+    if (path.startsWith(`${EDITION.folder}/`)) this.readComponentNames();
+  }
+
+  // A component, changed in its folder, which Obsidian says of for Components', writes back each note that uses it,
+  // after a pause, as it's typed in, so every note that uses it follows.
+  componentChanged(file) {
+    const name = EDITION.components.exec(`/${file.path}`)?.[1];
+    if (!this.settings.writeBack || !name || file.path !== `${EDITION.folder}/${file.name}`) return;
+
+    this.readComponentNames();
+    const uses = new RegExp(String.raw`(?:<!--|<\{|^)[ \t]*:?${name}\b`, 'm');
+    clearTimeout(this.componentTimer);
+    this.componentTimer = setTimeout(() => this.writeBackAll((markdown) => uses.test(markdown)), DELAY);
+  }
+
   // Writes back each note the test picks, one after another, and says how many changed if asked.
   async writeBackAll(test, { notify = false } = {}) {
     let changed = 0;
     for (const file of this.app.vault.getMarkdownFiles()) {
-      if (test(await this.app.vault.cachedRead(file), this.settings) && await this.writeBack(file, { force: true })) changed++;
+      if (test(await this.app.vault.cachedRead(file), this.editingOptions()) && await this.writeBack(file, { force: true })) changed++;
     }
     if (notify) new Notice(`Wrote back ${changed} ${changed === 1 ? 'note' : 'notes'}`);
   }
@@ -570,7 +636,7 @@ class RaindownPlugin extends Plugin {
 
     const original = this.editorFor(file)?.getValue() ?? await this.app.vault.read(file);
     const unchanged = !force && this.written.get(file.path) === original;
-    if (!notify && (unchanged || !hasDirectives(original, this.settings))) return false;
+    if (!notify && (unchanged || !hasDirectives(original, this.editingOptions()))) return false;
 
     try {
       const { output: markdown, warnings } = await this.raindown({ file, markdown: original, execute });
@@ -645,7 +711,7 @@ class RaindownPlugin extends Plugin {
   // like a path, and table: would make a file for each, like test.csv, rtest.csv and ratest.csv. The commands don't.
   holdWhileOnDirective(file) {
     const editor = this.editorFor(file);
-    if (!editor || !onDirectiveLine(editor.getValue(), editor.getCursor(), { bare: this.settings.bareSyntax })) return false;
+    if (!editor || !onDirectiveLine(editor.getValue(), editor.getCursor(), this.editingOptions())) return false;
 
     if (!this.held.has(file.path)) {
       this.held.add(file.path);
@@ -658,7 +724,8 @@ class RaindownPlugin extends Plugin {
   // Enter in a table's row writes back, saving the cell left to its table's file and clipping it, as typing in a fixed
   // column doesn't, like a spreadsheet's cell is saved when it's done with.
   enterInTable(view, info) {
-    const change = enteredCell(view.state.doc.toString(), view.state.selection.main.head, { bare: this.settings.bareSyntax });
+    if (!EDITION.full) return false;
+    const change = enteredCell(view.state.doc.toString(), view.state.selection.main.head, this.editingOptions());
     if (!change) return false;
 
     view.dispatch({ changes: { from: change.from, to: change.to, insert: change.insert }, selection: { anchor: change.cursor }, userEvent: 'input' });
@@ -668,6 +735,7 @@ class RaindownPlugin extends Plugin {
 
   // Tab in a table's row moves to the next cell, or back, and writes back, saving the cell left, like Enter.
   tabInTable(view, info, options) {
+    if (!EDITION.full) return false;
     const cursor = tabbedCell(view.state.doc.toString(), view.state.selection.main.head, options);
     if (cursor === null) return false;
 
@@ -685,12 +753,12 @@ class RaindownPlugin extends Plugin {
   // Whether the cursor's in a table: block's fixed column, where typing isn't written back, as Raindown would clip what's
   // being typed, until Enter or saving.
   inFixedCell(editor) {
-    return inFixedCell(editor.getValue(), editor.getCursor(), { bare: this.settings.bareSyntax });
+    return inFixedCell(editor.getValue(), editor.getCursor(), this.editingOptions());
   }
 
   confirmHeld(info) {
     if (!info?.file || !this.held.has(info.file.path)) return false;
-    if (!onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), { bare: this.settings.bareSyntax })) return false;
+    if (!onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), this.editingOptions())) return false;
 
     this.held.delete(info.file.path);
     this.app.workspace.updateOptions(); // Hides the hint.
@@ -701,7 +769,7 @@ class RaindownPlugin extends Plugin {
   // Writes back a held note once its cursor has left the directive's line.
   cursorMoved(info) {
     if (!info?.file || !this.held.has(info.file.path)) return;
-    if (onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), { bare: this.settings.bareSyntax })) return;
+    if (onDirectiveLine(info.editor.getValue(), info.editor.getCursor(), this.editingOptions())) return;
 
     this.held.delete(info.file.path);
     this.scheduleWriteBack(info.file, 0);
@@ -718,17 +786,18 @@ class RaindownPlugin extends Plugin {
 
   // A project's own nodes, from the .raindown folder in the note's folder or the nearest one above it.
   async projectNodes(file) {
-    const nodes = vaultPath(await this.projectRoot(file), '.raindown');
+    const nodes = vaultPath(await this.projectRoot(file), EDITION.folder);
     if (!await this.app.vault.adapter.exists(nodes)) return [];
 
     const { files } = await this.app.vault.adapter.list(nodes);
-    return files.map((file) => /\/([A-Z]\w*)\.(?:rb|js|mjs|md|rd)$/.exec(file)?.[1]).filter(Boolean);
+    return files.map((file) => EDITION.components.exec(file)?.[1]).filter(Boolean);
   }
 
-  // The folder Raindown reads a note's files from, like a table's: the nearest with a .raindown folder, or the vault.
+  // The folder Raindown reads a note's files from, like a table's: the nearest with a .raindown folder, or Components',
+  // or the vault.
   async projectRoot(file) {
     for (let folder = vaultPath(file?.parent?.path ?? ''); ; folder = vaultPath(folder, '..')) {
-      if (await this.app.vault.adapter.exists(vaultPath(folder, '.raindown'))) return folder;
+      if (await this.app.vault.adapter.exists(vaultPath(folder, EDITION.folder))) return folder;
       if (folder === '') return '';
     }
   }
@@ -746,7 +815,7 @@ class RaindownPlugin extends Plugin {
   tableAtCursor(editor) {
     const { line } = editor.getCursor();
     const cursorLineEnd = editor.posToOffset({ line, ch: editor.getLine(line).length });
-    return tableFiles(editor.getValue(), { bare: this.settings.bareSyntax }).filter(({ at }) => at <= cursorLineEnd).at(-1);
+    return tableFiles(editor.getValue(), this.editingOptions()).filter(({ at }) => at <= cursorLineEnd).at(-1);
   }
 
   // An open note's changed in its editor, as typing it would be, which Obsidian then saves, rather than on disk under

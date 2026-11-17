@@ -249,32 +249,52 @@ runtime = {
   rootData: z85(compressed_root),
   rootDataSize: compressed_root.bytesize
 }
+edition = File.read(File.join(ROOT, 'src', 'edition.js'))
 sources = {
   './runtime' => "module.exports = #{JSON.generate(runtime)};",
+  './edition' => edition,
   './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
   './editing' => File.read(EDITING),
   './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js'))
 }
-modules = sources.map { |name, code| "#{JSON.generate(name)}: function (module, exports, require) {\n#{code}\n}" }
-File.write(File.join(ROOT, 'main.js'), <<~JS)
-  'use strict';
 
-  // Built by bin/build from src/, with Raindown packed into Ruby compiled to WebAssembly. Edit src/, rather than this.
-  const sources = {
-  #{modules.join(",\n")}
-  };
-  const loaded = {};
-  function load(name) {
-    if (!sources[name]) return require(name);
-    if (!loaded[name]) {
-      loaded[name] = { exports: {} };
-      sources[name](loaded[name], loaded[name].exports, load);
+# A main.js of the sources' modules, as Node would load them, for Obsidian, which loads one file.
+def write_main(path, sources)
+  modules = sources.map { |name, code| "#{JSON.generate(name)}: function (module, exports, require) {\n#{code}\n}" }
+  File.write(path, <<~JS)
+    'use strict';
+
+    // Built by bin/build from src/, with Raindown packed into Ruby compiled to WebAssembly. Edit src/, rather than this.
+    const sources = {
+    #{modules.join(",\n")}
+    };
+    const loaded = {};
+    function load(name) {
+      if (!sources[name]) return require(name);
+      if (!loaded[name]) {
+        loaded[name] = { exports: {} };
+        sources[name](loaded[name], loaded[name].exports, load);
+      }
+      return loaded[name].exports;
     }
-    return loaded[name].exports;
-  }
-  module.exports = load('./plugin');
-JS
-puts format('Built main.js: %.2f MB, with ruby.wasm\'s modules of %.2f MB, and %.2f MB without Asyncify',
+    module.exports = load('./plugin');
+  JS
+end
+
+write_main(File.join(ROOT, 'main.js'), sources)
+
+# Components, the plugin for beginners, the same but for its edition, in build/components, with its manifest, at the
+# plugin's version, and styles.
+components_edition = edition.sub("const BUILT = 'full';", "const BUILT = 'components';")
+abort "src/edition.js no longer names the edition it's built as with const BUILT = 'full';" if components_edition == edition
+components = File.join(BUILD, 'components')
+FileUtils.mkdir_p(components)
+write_main(File.join(components, 'main.js'), sources.merge('./edition' => components_edition))
+manifest = JSON.parse(File.read(File.join(ROOT, 'components', 'manifest.json')))
+version = JSON.parse(File.read(File.join(ROOT, 'manifest.json'))).fetch('version')
+File.write(File.join(components, 'manifest.json'), "#{JSON.pretty_generate({ 'id' => manifest['id'], 'name' => manifest['name'], 'version' => version, **manifest.except('id', 'name') })}\n")
+FileUtils.cp(File.join(ROOT, 'styles.css'), components)
+puts format('Built main.js, and Components\' in build/components: %.2f MB, with ruby.wasm\'s modules of %.2f MB, and %.2f MB without Asyncify',
             File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6, File.size(wasm_jspi) / 1e6)
 # Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's, with
 # Asyncify's module, with JSPI hidden, as in Safari, then with the one without it, with Node 26's JSPI.

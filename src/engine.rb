@@ -39,9 +39,18 @@ module RaindownEngine
   # Rendered as Markdown, for reading view, which Obsidian renders itself, or written back, running its endpoints with
   # execute.
   def answered(request, markdown, **options)
+    return { output: markdown, warnings: [] } if component?(options[:path])
     return { output: Raindown::Editing.render_markdown(markdown, **options, commonmark: false) } if request['render']
 
     Raindown::Editing.rewrite_markdown(markdown, **options, execute: request['execute'] == true)
+  end
+
+  # Whether the note's a Markdown Component, in Components' folder, which Obsidian shows, whose template's left as it's
+  # written, as writing it back would write its directives, rather than leaving them for each note that uses it.
+  def component?(path)
+    return false if Raindown.edition.full?
+
+    File.dirname(path) == File.join('/vault', Raindown.edition.folder) && Raindown::MarkdownNodes.file?(path)
   end
 
   def dated(value)

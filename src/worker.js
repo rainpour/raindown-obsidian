@@ -13,6 +13,9 @@
 const { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory } = self['ruby-wasm-wasi'];
 const ARGS = ['ruby.wasm', '--disable-gems', '-EUTF-8', '-e_=0'];
 const REQUEST = 'request.json';
+// The plugin's edition, as Raindown's, which has the same: Components, for beginners, with only Markdown Components, in
+// a vault's Components folder, or Raindown itself, as it is.
+const RUBY_EDITIONS = { full: '', components: 'Raindown.edition = Raindown::Edition::COMPONENTS' };
 const FRONT_MATTERS = 'front_matters.json';
 
 let root;
@@ -79,7 +82,7 @@ async function answer(data) {
 // each gem's, as packed. It's the one without Asyncify when the engine sends it, as it has JSPI. Says it's begun, so
 // the engine reads the vault meanwhile, rather than before. Answers with how long each step took, in milliseconds from
 // the start, as timings.
-async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, vault = '' }) {
+async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFiles, rootData, rootDataSize, vault = '', edition = 'full' }) {
   self.postMessage({ type: 'began' });
   const began = performance.now();
   const timings = {};
@@ -139,6 +142,7 @@ async function start({ wasm, wasmSize, wasmJspi, wasmJspiSize, loadPaths, rootFi
     "require 'engine'",
     "require 'worker'",
     jspi ? JSPI_RUBY : '',
+    RUBY_EDITIONS[edition],
     'GC.enable'
   ].join('\n'));
   if (jspi) jspiModule = vm.eval('RbWasmJSPI');
