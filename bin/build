@@ -158,69 +158,75 @@ def copy(from, to)
   FileUtils.cp_r(from, to)
 end
 
-# 1. What loads.
-loaded_file = File.join(BUILD, 'loaded.json')
-FileUtils.mkdir_p(BUILD)
-run(
-  { 'BUNDLE_GEMFILE' => File.join(RAINDOWN, 'Gemfile') },
-  *BUNDLED,
-  'ruby',
-  '-rrbconfig',
-  '-I',
-  File.join(ROOT, 'src'),
-  File.join(ROOT, 'scripts', 'trace.rb'), loaded_file
-)
-loaded = JSON.parse(File.read(loaded_file))
-
-# 2. Staged as inside Ruby.
-FileUtils.rm_rf(STAGE)
-stdlib = File.join(ruby_wasi, RUBY_LIB)
-loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(STAGE, RUBY_LIB, it)) }
-load_paths = ['/engine']
-loaded['gems'].each do |name, gem|
-  # Only the files that loaded, and gem data, like unicode-display_width's tables, beside its code.
-  gem['files'].each { copy(File.join(gem['root'], it), File.join(STAGE, 'gems', name, it)) }
-  data = File.join(gem['root'], 'data')
-  copy(data, File.join(STAGE, 'gems', name, 'data')) if File.directory?(data)
-  load_paths.concat(gem['require_paths'].map { "/gems/#{name}/#{it}" })
-end
-%w[engine.rb bytecode.rb worker.rb].each { copy(File.join(ROOT, 'src', it), File.join(STAGE, 'engine', it)) }
-
 # Files Ruby loads before src/bytecode.rb, from their source, which is kept, as are those Raindown reads as text, like
 # Lowkey's for a class that includes LowType, which scripts/trace.rb lists.
 BEFORE_BYTECODE = %w[rbconfig.rb].freeze
 
-# 3. Bytecode, with build/root as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest are
-# rarely loaded, and they're compiled from source when they are.
-folders = %w[usr gems engine]
-if ENV['WASMTIME']
-  compiled = loaded['stdlib'].map { "/#{RUBY_LIB}/#{it}" } + ['/engine/engine.rb'] +
-             loaded['gems'].flat_map { |name, gem| gem['files'].map { "/gems/#{name}/#{it}" } }
-  File.write(File.join(BUILD, 'compile.txt'), compiled.join("\n"))
-  run(ENV['WASMTIME'], 'run', '--dir', "#{STAGE}::/", '--dir', "#{File.join(ROOT, 'scripts')}::/scripts",
-      '--dir', "#{BUILD}::/build", File.join(ruby_wasi, 'usr', 'local', 'bin', 'ruby'), '--disable-gems',
-      '/scripts/compile.rb', '/bytecode', '/build/compile.txt')
-  folders << 'bytecode'
-  # Only the bytecode's packed, as each source file's left empty, which Ruby still needs to find it to require it.
-  # A file that failed to compile keeps its source.
-  emptied = compiled.count do |file|
-    next false if BEFORE_BYTECODE.include?(File.basename(file)) || loaded['read'].include?(file)
-    next false unless File.exist?(File.join(STAGE, 'bytecode', "#{file}.yarb"))
+# An edition's Ruby, full or components, as each loads only what its features need, packed in its folder: the plugin's
+# in build, Components' in build/components, with what loaded, staged in root, and packed in root.bin. Gives what
+# loaded, its load paths and the packed files.
+def packed_root(edition, folder)
+  stage = File.join(folder, 'root')
+  FileUtils.mkdir_p(folder)
 
-    File.write(File.join(STAGE, file), '')
+  # 1. What loads.
+  loaded_file = File.join(folder, 'loaded.json')
+  run({ 'BUNDLE_GEMFILE' => File.join(RAINDOWN, 'Gemfile') }, *BUNDLED, 'ruby', '-rrbconfig', '-I', File.join(ROOT, 'src'),
+      File.join(ROOT, 'scripts', 'trace.rb'), loaded_file, edition)
+  loaded = JSON.parse(File.read(loaded_file))
+
+  # 2. Staged as inside Ruby.
+  FileUtils.rm_rf(stage)
+  stdlib = File.join(ruby_wasi, RUBY_LIB)
+  loaded['stdlib'].each { copy(File.join(stdlib, it), File.join(stage, RUBY_LIB, it)) }
+  load_paths = ['/engine']
+  loaded['gems'].each do |name, gem|
+    # Only the files that loaded, and gem data, like unicode-display_width's tables, beside its code.
+    gem['files'].each { copy(File.join(gem['root'], it), File.join(stage, 'gems', name, it)) }
+    data = File.join(gem['root'], 'data')
+    copy(data, File.join(stage, 'gems', name, 'data')) if File.directory?(data)
+    load_paths.concat(gem['require_paths'].map { "/gems/#{name}/#{it}" })
   end
-  puts "Packed #{emptied} files as bytecode only"
+  %w[engine.rb bytecode.rb worker.rb].each { copy(File.join(ROOT, 'src', it), File.join(stage, 'engine', it)) }
+
+  # 3. Bytecode, with the stage as Ruby's / and scripts/ for compile.rb, for only the files that loaded, as the rest
+  # are rarely loaded, and they're compiled from source when they are.
+  folders = %w[usr gems engine]
+  if ENV['WASMTIME']
+    compiled = loaded['stdlib'].map { "/#{RUBY_LIB}/#{it}" } + ['/engine/engine.rb'] +
+               loaded['gems'].flat_map { |name, gem| gem['files'].map { "/gems/#{name}/#{it}" } }
+    File.write(File.join(folder, 'compile.txt'), compiled.join("\n"))
+    run(ENV['WASMTIME'], 'run', '--dir', "#{stage}::/", '--dir', "#{File.join(ROOT, 'scripts')}::/scripts",
+        '--dir', "#{folder}::/build", File.join(ruby_wasi, 'usr', 'local', 'bin', 'ruby'), '--disable-gems',
+        '/scripts/compile.rb', '/bytecode', '/build/compile.txt')
+    folders << 'bytecode'
+    # Only the bytecode's packed, as each source file's left empty, which Ruby still needs to find it to require it.
+    # A file that failed to compile keeps its source.
+    emptied = compiled.count do |file|
+      next false if BEFORE_BYTECODE.include?(File.basename(file)) || loaded['read'].include?(file)
+      next false unless File.exist?(File.join(stage, 'bytecode', "#{file}.yarb"))
+
+      File.write(File.join(stage, file), '')
+    end
+    puts "Packed #{emptied} files as bytecode only, for #{edition}"
+  end
+
+  # 4. Packed into main.js, with the js gem's files, which rbwasm packs into a module otherwise, and a
+  # /bundle/setup.rb, which ruby.wasm's browser bundle loads, that finds them.
+  copy(File.join(Gem::Specification.find_by_name('js').full_gem_path, 'lib'), File.join(stage, 'bundle', 'js', 'lib'))
+  File.write(File.join(stage, 'bundle', 'setup.rb'), "$LOAD_PATH.unshift('/bundle/js/lib')\n")
+  folders << 'bundle'
+  # They're one after another, compressed together, like the modules, with each one's path and size.
+  root_files = folders.flat_map { |at| Dir.glob("#{at}/**/*", base: stage) }.select { File.file?(File.join(stage, it)) }
+  root_data = File.join(folder, 'root.bin')
+  File.binwrite(root_data, root_files.map { File.binread(File.join(stage, it)) }.join)
+  compressed = gzipped(root_data)
+  { loadPaths: load_paths, rootFiles: root_files.map { [it, File.size(File.join(stage, it))] }, rootData: z85(compressed),
+    rootDataSize: compressed.bytesize }
 end
 
-# 4. Packed into main.js, with the js gem's files, which rbwasm packs into a module otherwise, and a /bundle/setup.rb,
-# which ruby.wasm's browser bundle loads, that finds them.
-copy(File.join(Gem::Specification.find_by_name('js').full_gem_path, 'lib'), File.join(STAGE, 'bundle', 'js', 'lib'))
-File.write(File.join(STAGE, 'bundle', 'setup.rb'), "$LOAD_PATH.unshift('/bundle/js/lib')\n")
-folders << 'bundle'
-# They're one after another, compressed together, like the modules, with each one's path and size.
-root_files = folders.flat_map { |folder| Dir.glob("#{folder}/**/*", base: STAGE) }.select { File.file?(File.join(STAGE, it)) }
-root_data = File.join(BUILD, 'root.bin')
-File.binwrite(root_data, root_files.map { File.binread(File.join(STAGE, it)) }.join)
+full_root = packed_root('full', BUILD)
+components_root = packed_root('components', File.join(BUILD, 'components'))
 wasm = File.join(BUILD, 'raindown.wasm')
 FileUtils.cp(ruby_module, wasm)
 wasm_jspi = File.join(BUILD, 'raindown-jspi.wasm')
@@ -237,21 +243,16 @@ abort "ruby.wasm's browser bundle no longer exports DefaultRubyVM where it did" 
 worker = [browser, File.read(SERVICES), File.read(File.join(ROOT, 'src', 'worker.js'))].join("\n")
 compressed = gzipped(wasm)
 compressed_jspi = gzipped(wasm_jspi)
-compressed_root = gzipped(root_data)
 runtime = {
   wasm: z85(compressed),
   wasmSize: compressed.bytesize,
   wasmJspi: z85(compressed_jspi),
   wasmJspiSize: compressed_jspi.bytesize,
-  worker:,
-  loadPaths: load_paths,
-  rootFiles: root_files.map { [it, File.size(File.join(STAGE, it))] },
-  rootData: z85(compressed_root),
-  rootDataSize: compressed_root.bytesize
+  worker:
 }
 edition = File.read(File.join(ROOT, 'src', 'edition.js'))
 sources = {
-  './runtime' => "module.exports = #{JSON.generate(runtime)};",
+  './runtime' => "module.exports = #{JSON.generate(runtime.merge(full_root))};",
   './edition' => edition,
   './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
   './editing' => File.read(EDITING),
@@ -288,14 +289,16 @@ write_main(File.join(ROOT, 'main.js'), sources)
 components_edition = edition.sub("const BUILT = 'full';", "const BUILT = 'components';")
 abort "src/edition.js no longer names the edition it's built as with const BUILT = 'full';" if components_edition == edition
 components = File.join(BUILD, 'components')
-FileUtils.mkdir_p(components)
-write_main(File.join(components, 'main.js'), sources.merge('./edition' => components_edition))
+write_main(File.join(components, 'main.js'),
+           sources.merge('./edition' => components_edition,
+                         './runtime' => "module.exports = #{JSON.generate(runtime.merge(components_root))};"))
 manifest = JSON.parse(File.read(File.join(ROOT, 'components', 'manifest.json')))
 version = JSON.parse(File.read(File.join(ROOT, 'manifest.json'))).fetch('version')
 File.write(File.join(components, 'manifest.json'), "#{JSON.pretty_generate({ 'id' => manifest['id'], 'name' => manifest['name'], 'version' => version, **manifest.except('id', 'name') })}\n")
 FileUtils.cp(File.join(ROOT, 'styles.css'), components)
-puts format('Built main.js, and Components\' in build/components: %.2f MB, with ruby.wasm\'s modules of %.2f MB, and %.2f MB without Asyncify',
-            File.size(File.join(ROOT, 'main.js')) / 1e6, File.size(wasm) / 1e6, File.size(wasm_jspi) / 1e6)
+puts format('Built main.js: %.2f MB, and Components\' in build/components: %.2f MB, with ruby.wasm\'s modules of %.2f MB, ' \
+            'and %.2f MB without Asyncify', File.size(File.join(ROOT, 'main.js')) / 1e6,
+            File.size(File.join(components, 'main.js')) / 1e6, File.size(wasm) / 1e6, File.size(wasm_jspi) / 1e6)
 # Node runs the smoke test, then Ruby's jumps, which wasm/patches changes, in the module, against native Ruby's, with
 # Asyncify's module, with JSPI hidden, as in Safari, then with the one without it, with Node 26's JSPI.
 # CI has Node, so a release is always checked, but working on the plugin doesn't need it.

@@ -4,12 +4,13 @@
 # then lists, in build/loaded.json, its answers, written back and rendered for reading view, for scripts/smoke.js to
 # check the plugin's against, and every Ruby file
 # that loaded, for bin/build to pack into the WebAssembly module and no more: the standard library's, by their paths in its folder, with this Ruby's platform folder as WebAssembly's, and each
-# gem's folder, load paths and the files that loaded from it. Run natively, from a Raindown checkout, as bin/build does:
-#   bundle exec ruby -rrbconfig -I PLUGIN/src PLUGIN/scripts/trace.rb PLUGIN/build/loaded.json
+# gem's folder, load paths and the files that loaded from it. With an edition, full or components, it writes back as
+# that plugin does, so Components packs only what it loads, with the vault's Markdown Components in its folder. Run
+# natively, from a Raindown checkout, as bin/build does:
+#   bundle exec ruby -rrbconfig -I PLUGIN/src PLUGIN/scripts/trace.rb PLUGIN/build/loaded.json [full|components]
 # Bundler only finds the gems. Then it runs again without Bundler or RubyGems, from the gems' folders, as Ruby does in
 # WebAssembly. Gems with native code, like json, or prism, even precompiled, are left to the standard library, which has
 # them built in, as their Ruby must match the code built into WebAssembly's Ruby.
-require 'tmpdir'
 
 # The Ruby files read as text, rather than only loaded, like those Lowkey parses for a class that includes LowType,
 # whose source bin/build packs as well as their bytecode.
@@ -73,20 +74,37 @@ class ForkedQuickJS
     { error: e.message }
   end
 end
-Raindown::JSNodes.host = ForkedQuickJS.new
+# Only Raindown runs JavaScript nodes, and its worker connects them.
+if ARGV.fetch(1, 'full') == 'full'
+  require 'raindown/js/js_nodes'
+  Raindown::JSNodes.host = ForkedQuickJS.new
+else
+  Raindown.edition = Raindown::Edition::COMPONENTS
+end
 
 # Native Raindown's answers, by each note's path, written back and rendered, which scripts/smoke.js checks the
-# plugin's match.
+# plugin's match, from a copy of the vault, made with cp, rather than tmpdir and FileUtils, so only what Raindown loads
+# is packed.
 answers, renders = [false, true].map do |render|
-  Dir.mktmpdir do |vault|
-    FileUtils.cp_r("#{VAULT}/.", vault)
+  vault = File.join(ENV.fetch('TMPDIR', '/tmp'), "raindown-trace-#{Process.pid}-#{render}")
+  begin
+    system('cp', '-R', VAULT, vault, exception: true)
+    # The vault's Markdown Components, in the edition's folder, like Components', when it's not .raindown.
+    components = File.join(vault, Raindown.edition.folder)
+    unless File.directory?(components)
+      system('mkdir', components, exception: true)
+      system('cp', *Dir.glob("#{vault}/.raindown/*.md"), components, exception: true)
+    end
     request = File.join(vault, 'request.json')
     Dir.glob('**/*.md', base: VAULT).sort.to_h do |path|
       File.write(request, JSON.generate(path: File.join(vault, path), markdown: File.read(File.join(VAULT, path)), render:))
       answer = JSON.parse(RaindownEngine.answer(request))
-      abort "#{path}: #{answer['error']}" if answer['error']
+      # A note using Raindown's own directives, like endpoint:, fails in Components, which hasn't them, as it would there.
+      abort "#{path}: #{answer['error']}" if answer['error'] && Raindown.edition == Raindown::Edition::FULL
       [path, answer['output']]
     end
+  ensure
+    system('rm', '-rf', vault)
   end
 end
 

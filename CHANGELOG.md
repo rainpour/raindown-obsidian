@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A component's bare directive, like `BookCard: title: Dune`, works in every note, without the Bare syntax setting, and is highlighted, as Raindown's own, like `toc:`, still need it
 - Raindown runs inside the plugin, so there's nothing else to install
+- Components is smaller, under 5 MB rather than 5.8, packing only the Ruby it runs, rather than all of Raindown's, with Raindown's next release
 - Endpoints are sent by Obsidian, rather than curl
 - JavaScript components run inside the plugin, rather than Node.js
 - Raindown starts in about half the time, and the plugin's about 10 MB, with Ruby for engines with JSPI and for those without

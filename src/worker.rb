@@ -2,8 +2,7 @@
 
 require 'js'
 require 'json'
-require 'raindown/endpoint/curl'
-require 'raindown/js/js_nodes'
+require 'raindown/services'
 
 # What Raindown can't do in WebAssembly, which has no processes, it asks of the plugin's worker, src/worker.js, and
 # waits for, as RaindownEngine.answer runs in evalAsync: an endpoint's request, which Obsidian sends with requestUrl,
@@ -37,8 +36,14 @@ module RaindownWorker
       reply
     end
   end
+
+  # Endpoints' requests and JavaScript Components, which only Raindown has, rather than Components.
+  def self.connect_raindown
+    require 'raindown/endpoint/curl'
+    require 'raindown/js/js_nodes'
+    Raindown::Curl.fetcher = method(:fetch)
+    Raindown::JSNodes.host = Components.new
+  end
 end
 
-Raindown::Curl.fetcher = RaindownWorker.method(:fetch)
-Raindown::JSNodes.host = RaindownWorker::Components.new
 Raindown::Services.host = RaindownWorker::Services

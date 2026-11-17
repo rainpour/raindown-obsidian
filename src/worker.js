@@ -14,8 +14,8 @@ const { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory } = self['ruby
 const ARGS = ['ruby.wasm', '--disable-gems', '-EUTF-8', '-e_=0'];
 const REQUEST = 'request.json';
 // The plugin's edition, as Raindown's, which has the same: Components, for beginners, with only Markdown Components, in
-// a vault's Components folder, or Raindown itself, as it is.
-const RUBY_EDITIONS = { full: '', components: 'Raindown.edition = Raindown::Edition::COMPONENTS' };
+// a vault's Components folder, or Raindown itself, with endpoints' requests and JavaScript Components connected.
+const RUBY_EDITIONS = { full: 'RaindownWorker.connect_raindown', components: 'Raindown.edition = Raindown::Edition::COMPONENTS' };
 const FRONT_MATTERS = 'front_matters.json';
 
 let root;

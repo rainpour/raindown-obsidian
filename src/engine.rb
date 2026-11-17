@@ -2,6 +2,7 @@
 
 require 'json'
 require 'raindown/editing'
+require 'raindown/markdown_nodes'
 
 # What the plugin's worker asks of Raindown, running in Ruby compiled to WebAssembly: a note written back, as
 # "raindown server" answers it, or rendered as Markdown, for reading view. The request is a file, /request.json, so the note's never quoted into Ruby code, and the
@@ -48,8 +49,6 @@ module RaindownEngine
   # Whether the note's a Markdown Component, in Components' folder, which Obsidian shows, whose template's left as it's
   # written, as writing it back would write its directives, rather than leaving them for each note that uses it.
   def component?(path)
-    return false if Raindown.edition.full?
-
     File.dirname(path) == File.join('/vault', Raindown.edition.folder) && Raindown::MarkdownNodes.file?(path)
   end
 

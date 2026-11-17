@@ -11,11 +11,17 @@ require 'monitor'
 require 'stringio'
 require 'date'
 require 'yaml'
-require 'tmpdir'
 
 OUT = []
-# A folder to write files in: the root of ruby.wasm's in-memory files, or a temporary one.
-ROOT = RUBY_PLATFORM.include?('wasm') ? '' : Dir.mktmpdir
+# A folder to write files in: the root of ruby.wasm's in-memory files, or a temporary one natively, with tmpdir, which the
+# plugin doesn't pack.
+def files_root
+  return '' if RUBY_PLATFORM.include?('wasm')
+
+  require 'tmpdir'
+  Dir.mktmpdir
+end
+ROOT = files_root
 FILE = "#{ROOT}/jumps_file.txt"
 File.write(FILE, "first line\nsecond\n")
 def t(name)
