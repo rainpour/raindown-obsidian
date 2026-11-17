@@ -81,6 +81,7 @@ jobs:
             styles.css
             build/components/main.js
             build/components/manifest.json
+            build/components/styles.css
       - name: Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
