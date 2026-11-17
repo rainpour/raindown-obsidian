@@ -1,15 +1,14 @@
 # Raindown for Obsidian
 
-A [Markdown superset](https://raindown.dev/) where data stays current and reads well everywhere.
+A [Markdown superset](https://raindown.dev/) where data stays current and reads well everywhere. Use for AI, APIs, Docs, READMEs and personal organisation. **Stay sane out there.**
 
 ## Features
 
 - **Portable** - Everyone sees the same thing with or without Raindown/Obsidian, on mobile, desktop and web
-- **Nodes** - [table](https://raindown.dev/docs/table), [toc](https://raindown.dev/docs/toc), [chart](https://raindown.dev/docs/chart), [list](https://raindown.dev/docs/list), [schema](https://raindown.dev/docs/schema)
-- [**Components**](https://raindown.dev/docs/components) - Create your own custom business logic and output
+- [**Components**](https://raindown.dev/docs/components) - [table](https://raindown.dev/docs/table), [toc](https://raindown.dev/docs/toc), [chart](https://raindown.dev/docs/chart), [list](https://raindown.dev/docs/list), [schema](https://raindown.dev/docs/schema)
+- [**Framework**](https://raindown.dev/docs/components) - Create your own components in JavaScript, Ruby and Markdown
 - **Multi-modal** - [3 input modes](https://raindown.dev/docs/directives) and 2 output modes per component
-- **Multi-domain** - Terminal UI, VS Code, Obsidian, static site generation
-- **Templating** - Advanced templating layer built on the same syntax
+- **Multi-domain** - Use the same components in Terminal UI, VS Code, Obsidian, static site generation
 
 ### Table
 
