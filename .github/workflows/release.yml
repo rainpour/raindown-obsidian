@@ -98,8 +98,8 @@ jobs:
           GH_TOKEN: ${{ secrets.COMPONENTS_TOKEN }}
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "::warning::Components wasn't released, as there's no COMPONENTS_TOKEN"; exit 0; fi
-          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/rainpour/obsidian-components.git" build/obsidian-components
-          scripts/mirror_components HEAD build/obsidian-components
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/rainpour/obsidian-components.git" build/obsidian-components
+          scripts/mirror_components build/obsidian-components HEAD
           cd build/obsidian-components
           cp ../components/manifest.json manifest.json
           node -e "const fs = require('fs'); const versions = require('./versions.json'); versions[process.argv[1]] = require('./manifest.json').minAppVersion; fs.writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')" "$GITHUB_REF_NAME"
@@ -107,6 +107,30 @@ jobs:
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add --all
           git diff --cached --quiet || git commit -m "$GITHUB_REF_NAME, from rainpour/raindown-obsidian"
+          git pull --rebase origin main
           git push origin main
           gh release create "$GITHUB_REF_NAME" --repo rainpour/obsidian-components ../components/main.js ../components/manifest.json ../components/styles.css \
             --title "$GITHUB_REF_NAME" --notes "Built with the Raindown plugin's release $GITHUB_REF_NAME, from rainpour/raindown-obsidian."
+
+  # Components' repository's own files, like its README, from components/repository, on each push to main, so a change
+  # to them is there in a minute, rather than at the next release, which copies the plugin's source there too.
+  components:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - name: Update Components' repository
+        env:
+          GH_TOKEN: ${{ secrets.COMPONENTS_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::Components' repository wasn't updated, as there's no COMPONENTS_TOKEN"; exit 0; fi
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/rainpour/obsidian-components.git" build/obsidian-components
+          scripts/mirror_components build/obsidian-components
+          cd build/obsidian-components
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add --all
+          git diff --cached --quiet && exit 0
+          git commit -m "Its files, from rainpour/raindown-obsidian@${GITHUB_SHA::7}"
+          git pull --rebase origin main
+          git push origin main

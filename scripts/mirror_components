@@ -1,13 +1,18 @@
 #!/bin/bash
-# Copies the plugin's source, as it is at a tag or commit, into a checkout of rainpour/obsidian-components, Components'
-# own repository, which Obsidian lists it from, and needs its source in: what bin/build builds both plugins from, as git
-# has it, replacing what was copied before, so a file deleted here goes there too, and leaving that repository's own
-# files, like its README, manifest, versions and workflows, as they are. CI's release runs it, with the tag released.
-#   scripts/mirror_components 0.11.0 ../obsidian-components
+# Fills in a checkout of rainpour/obsidian-components, Components' own repository, which Obsidian lists it from: its own
+# files, like its README, from components/repository, with the plugin's license, and with a tag or commit, the plugin's
+# source, as it is there, as Obsidian needs a plugin's source in its repository: what bin/build builds both plugins
+# from, as git has it, replacing what was copied before, so a file deleted here goes there too. Only CI writes there:
+# each push to main copies its files, and each release its source too.
+#   scripts/mirror_components ../obsidian-components [0.11.2]
 set -euo pipefail
-ref=$1
-target=$(cd "$2" && pwd)
+target=$(cd "$1" && pwd)
+ref=${2:-}
 cd "$(dirname "$0")/.."
+cp -R components/repository/. "$target"
+cp LICENSE.txt "$target"
+[ -z "$ref" ] && exit 0
+
 paths=(src bin scripts wasm test components package.json .npmrc .ruby-version .tool-versions RAINDOWN_VERSION
   DEVELOPMENT.md styles.css version-bump.mjs)
 for path in "${paths[@]}"; do rm -rf "${target:?}/$path"; done

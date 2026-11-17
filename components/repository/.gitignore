@@ -1,0 +1,6 @@
+# bin/build's downloads, what it packs, and what it builds, which CI builds for a release.
+build/
+main.js
+# Obsidian saves a plugin's settings here when the folder is linked into a vault.
+data.json
+.DS_Store

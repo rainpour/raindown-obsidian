@@ -1,0 +1,37 @@
+name: attest
+
+# Components is built by rainpour/raindown-obsidian's release, which attests what it built there, then releases it
+# here. This attests the release's files here too, where Obsidian looks for them, after checking each was attested by
+# that build, so it only vouches for files built from the plugin's source. It runs as each release is published, or by
+# hand for a release's tag.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release's tag, like 0.11.0
+        required: true
+
+jobs:
+  attest:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
+    steps:
+      - name: Download the release's files, and check raindown-obsidian's build attested each
+        run: |
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" -p main.js -p manifest.json -p styles.css
+          for file in main.js manifest.json styles.css; do gh attestation verify "$file" --repo rainpour/raindown-obsidian; done
+      - uses: actions/attest@v4
+        with:
+          subject-path: |
+            main.js
+            manifest.json
+            styles.css
