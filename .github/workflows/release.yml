@@ -88,8 +88,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: gh release create "$GITHUB_REF_NAME" main.js manifest.json styles.css --title "$GITHUB_REF_NAME" --generate-notes
       # Components, the plugin for beginners, which bin/build builds into build/components, released from its own
-      # repository, as Obsidian lists each plugin from one: its manifest and versions on its main branch, which Obsidian
-      # reads its version from, then a release of the same version with its files. COMPONENTS_TOKEN, a secret, can write
+      # repository, as Obsidian lists each plugin from one: the source it's built from, as scripts/mirror_components
+      # copies it, as Obsidian needs a plugin's source in its repository, and its manifest and versions, on its main
+      # branch, which Obsidian reads its version from, then a release of the same version with its files. COMPONENTS_TOKEN, a secret, can write
       # to that repository. Without it, it's skipped, with a warning, as the plugin's released already.
       - name: Release Components
         if: startsWith(github.ref, 'refs/tags/')
@@ -98,13 +99,14 @@ jobs:
         run: |
           if [ -z "$GH_TOKEN" ]; then echo "::warning::Components wasn't released, as there's no COMPONENTS_TOKEN"; exit 0; fi
           git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/rainpour/obsidian-components.git" build/obsidian-components
+          scripts/mirror_components HEAD build/obsidian-components
           cd build/obsidian-components
           cp ../components/manifest.json manifest.json
           node -e "const fs = require('fs'); const versions = require('./versions.json'); versions[process.argv[1]] = require('./manifest.json').minAppVersion; fs.writeFileSync('versions.json', JSON.stringify(versions, null, 2) + '\n')" "$GITHUB_REF_NAME"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git add manifest.json versions.json
-          git diff --cached --quiet || git commit -m "$GITHUB_REF_NAME"
+          git add --all
+          git diff --cached --quiet || git commit -m "$GITHUB_REF_NAME, from rainpour/raindown-obsidian"
           git push origin main
           gh release create "$GITHUB_REF_NAME" --repo rainpour/obsidian-components ../components/main.js ../components/manifest.json ../components/styles.css \
             --title "$GITHUB_REF_NAME" --notes "Built with the Raindown plugin's release $GITHUB_REF_NAME, from rainpour/raindown-obsidian."
