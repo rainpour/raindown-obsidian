@@ -1,5 +1,6 @@
 ---
 title: Hi
+rating: 0
 ---
 
-**{title}**
+**{title}** · {rating}/5
