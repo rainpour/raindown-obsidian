@@ -41,6 +41,8 @@ STAGE = File.join(BUILD, 'root')
 RAINDOWN = File.expand_path(ENV.fetch('RAINDOWN_DIR', '../raindown'), ROOT)
 # Raindown's services for JavaScript nodes, which the worker answers, before its own code.
 SERVICES = File.join(RAINDOWN, 'lib', 'raindown', 'js', 'services.js')
+# Raindown's editing of Markdown as it's typed, like lining up tables, which the plugin requires as './editing'.
+EDITING = File.join(RAINDOWN, 'lib', 'raindown', 'js', 'editing.js')
 # Ruby is the plugin's .ruby-version, the same as ruby.wasm's, with Raindown's gems and rbwasm installed into it, which
 # mise gives it, unless there's no mise, like in CI.
 def mise_exec
@@ -225,7 +227,8 @@ wasm_jspi = File.join(BUILD, 'raindown-jspi.wasm')
 FileUtils.cp(ruby_module(jspi: true), wasm_jspi)
 
 # main.js, with the worker's code after Raindown's services.js. The browser bundle only gives DefaultRubyVM, which can't take Ruby's arguments, so it gives RubyVM and the
-# WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file.
+# WASI classes too. Each of src/'s files is a module, as Node would load it, for Obsidian, which loads one file, as is
+# Raindown's editing.js.
 browser = File.read(File.join(ruby_npm, 'browser.umd.js'))
 browser = browser.sub('exports.DefaultRubyVM = DefaultRubyVM;') do
   'exports.DefaultRubyVM = DefaultRubyVM; Object.assign(exports, { RubyVM, WASI, OpenFile, File, PreopenDirectory, Directory });'
@@ -249,6 +252,7 @@ runtime = {
 sources = {
   './runtime' => "module.exports = #{JSON.generate(runtime)};",
   './engine' => File.read(File.join(ROOT, 'src', 'engine.js')),
+  './editing' => File.read(EDITING),
   './plugin' => File.read(File.join(ROOT, 'src', 'plugin.js'))
 }
 modules = sources.map { |name, code| "#{JSON.generate(name)}: function (module, exports, require) {\n#{code}\n}" }

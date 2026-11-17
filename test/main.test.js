@@ -5,10 +5,13 @@ const Module = require('node:module');
 const path = require('node:path');
 const { test } = require('node:test');
 
-// The plugin requires 'obsidian', which only Obsidian provides, so it's given the stub instead.
+// The plugin requires 'obsidian', which only Obsidian provides, so it's given the stub instead, and './editing', which
+// bin/build packs from Raindown, from its checkout, at RAINDOWN_DIR or ../raindown, as bin/build finds it.
+const RAINDOWN = path.resolve(__dirname, '..', process.env.RAINDOWN_DIR ?? '../raindown');
 const resolve = Module._resolveFilename;
 Module._resolveFilename = function (request, ...rest) {
   if (request === 'obsidian') return path.join(__dirname, 'obsidian.js');
+  if (request === './editing') return path.join(RAINDOWN, 'lib', 'raindown', 'js', 'editing.js');
   if (request.startsWith('@codemirror/')) return path.join(__dirname, 'codemirror.js');
 
   return resolve.call(this, request, ...rest);

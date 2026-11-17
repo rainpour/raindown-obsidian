@@ -36,7 +36,7 @@ Once `main.js` is built, `scripts/smoke.js` runs its worker, with Raindown in We
 
 ## Testing
 
-The tests run outside Obsidian, with a stub of Obsidian's API, and a stand-in for Raindown:
+The tests run outside Obsidian, with a stub of Obsidian's API, and a stand-in for Raindown. Editing as it's typed, like lining up tables, and what Enter and Tab do in a table's cells, is Raindown's `lib/raindown/js/editing.js`, which the app edits with too, so the tests take it from Raindown's checkout, at `../raindown` or `RAINDOWN_DIR`, as `bin/build` does:
 
 ```sh
 npm test

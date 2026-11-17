@@ -28,7 +28,6 @@ jobs:
       - uses: actions/setup-node@v7
         with:
           node-version: 26
-      - run: npm test
       - name: Check the tag is the manifest's version
         if: startsWith(github.ref, 'refs/tags/')
         run: test "$GITHUB_REF_NAME" = "$(node -p "require('./manifest.json').version")"
@@ -41,6 +40,10 @@ jobs:
           repository: rainpour/raindown
           ref: ${{ steps.raindown.outputs.ref }}
           path: build/raindown
+      # After Raindown, as the plugin edits Markdown with its editing.js.
+      - run: npm test
+        env:
+          RAINDOWN_DIR: build/raindown
       # The plugin's .ruby-version, which is ruby.wasm's Ruby, as the standard library files a write-back loads, which
       # are packed from ruby.wasm's, differ between patch releases.
       - uses: ruby/setup-ruby@v1
