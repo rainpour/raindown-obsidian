@@ -1,7 +1,7 @@
 {
   "id": "raindown",
   "name": "Raindown",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "minAppVersion": "1.4.0",
   "description": "Automatically generate inline tables, TOCs, lists, charts and create custom components in your notes.",
   "author": "Raindown",
