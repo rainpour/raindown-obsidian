@@ -63,7 +63,3 @@ If your template contains any empty lines, for example...
 ## Advanced Usage
 
 Components is part of [Raindown](https://raindown.dev), which outputs tables, tables of contents, lists and charts into your notes too, and runs components written in JavaScript or Ruby. **Raindown** does everything Components does and more, so Components turns itself off when Raindown's enabled.
-
-## Source
-
-Components is built from the same source as Raindown's Obsidian plugin, in [rainpour/raindown-obsidian](https://github.com/rainpour/raindown-obsidian), where it's changed, this README included, in `components/repository`. This repository is filled in from there: its files as they change, and the plugin's source with each release, which [DEVELOPMENT.md](DEVELOPMENT.md) says how to build.
